@@ -49,7 +49,7 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 ## Requirements
 
 - Home Assistant OS or Supervised (for the app).
-- TCP 1883 free on the Home Assistant host.
+- TCP 1883 free on the Home Assistant host. Port 1883 is the only one the app publishes.
 - A fixed IP for the boiler's module (DHCP reservation).
 - A firewall or gateway able to redirect traffic for one device. **This redirection is required: without it the module keeps talking to the cloud and this project receives nothing.**
 
@@ -57,7 +57,7 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 
 1. **Add the repository.** Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
 2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it. The app installs the Home Assistant integration by itself.
-3. **Restart Home Assistant once** and add the integration Centrometal Local MQTT Protocol. Host `127.0.0.1` and port `8765` are already filled in.
+3. **Restart Home Assistant once** and add the integration Centrometal Local MQTT Protocol. Keep the host and port as they are: the integration finds the app and its access token by itself.
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:
 
    | Field | Value |
@@ -91,7 +91,7 @@ Disable the redirection rule, then restart the app. The module reconnects to the
 
 ## Security
 
-The module talks to the server over unencrypted MQTT and does not authenticate the server beyond a signature whose key derivation is already public. That is what makes this project possible, and it also means anyone able to redirect this traffic could do the same. Keep the module on a separate network, and never expose TCP 1883 or 8765 to the internet.
+The module talks to the server over unencrypted MQTT and does not authenticate the server beyond a signature whose key derivation is already public. That is what makes this project possible, and it also means anyone able to redirect this traffic could do the same. Keep the module on a separate network, and never expose TCP 1883 to the internet. The app runs under its own AppArmor profile, and its internal API needs a token generated at the first start.
 
 ## Disclaimer
 
