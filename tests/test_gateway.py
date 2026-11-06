@@ -62,6 +62,11 @@ async def next_message(reader, timeout=3):
     return g.verify_payload(g.get_publish(head, body)[1], KEY)
 
 
+def contextlib_null():
+    import contextlib
+    return contextlib.nullcontext()
+
+
 def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -194,14 +199,14 @@ class LocalTests(Base):
         gateway, port = await self.start(first_poll_delay_seconds=0, poll_interval_seconds=2)
         reader, _ = await self.handshake(port)
         seen = []
-        while len(seen) < 4:
+        while len(seen) < 3:
             message = await next_message(reader, 4)
             found = next(k for k in message if k not in ("srvMsgId", "_sign"))
             if not found.startswith("PRD"):
                 seen.append(found)
-        self.assertEqual(seen, ["REFRESH", "RSTAT", "REFRESH", "RSTAT"])
+        self.assertEqual(seen, ["REFRESH", "RSTAT", "REFRESH"])
         self.assertEqual(gateway.state.mode, "local")
-        self.assertGreaterEqual(gateway.state.status_requests_sent, 4)
+        self.assertGreaterEqual(gateway.state.status_requests_sent, 3)
 
     async def test_refresh_payload_matches_documented_format(self):
         _, port = await self.start(first_poll_delay_seconds=0)
@@ -831,6 +836,53 @@ class AlarmTests(unittest.TestCase):
             path = os.path.join(folder, "alarms.json")
             Path(path).write_text("nu e json")
             self.assertEqual(g.State(alarm_path=path).active_alarms, {})
+
+
+class LiveUpdateTests(Base):
+    async def call(self, gateway, path):
+        server = await asyncio.start_server(lambda r, w: g.send_http_status(r, w, gateway), "127.0.0.1", 0)
+        self.servers.append(server)
+        reader, writer = await self.module(server.sockets[0].getsockname()[1])
+        writer.write(f"GET {path} HTTP/1.1\r\n\r\n".encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(), 5)
+        return json.loads(raw.split(b"\r\n\r\n", 1)[1])
+
+    async def test_answer_comes_as_soon_as_new_data_arrives(self):
+        gateway = g.Gateway(config(long_poll_seconds=4))
+        start = time.monotonic()
+        task = asyncio.create_task(self.call(gateway, "/status?since=0"))
+        await asyncio.sleep(.2)
+        gateway.state.ingest({"B_Tk1": 60.5, "clMsgId": 1})
+        data = await task
+        self.assertEqual(data["values"]["B_Tk1"], 60.5)
+        self.assertEqual(data["revision"], 1)
+        self.assertLess(time.monotonic() - start, 2)
+
+    async def test_answer_at_once_when_already_behind(self):
+        gateway = g.Gateway(config(long_poll_seconds=4))
+        gateway.state.ingest({"B_Tk1": 60.5, "clMsgId": 1})
+        start = time.monotonic()
+        self.assertEqual((await self.call(gateway, "/status?since=-1"))["revision"], 1)
+        self.assertLess(time.monotonic() - start, 1)
+
+    async def test_answer_after_the_timeout_without_data(self):
+        gateway = g.Gateway(config(long_poll_seconds=.4))
+        start = time.monotonic()
+        self.assertEqual((await self.call(gateway, "/status?since=0"))["revision"], 0)
+        self.assertGreater(time.monotonic() - start, .35)
+
+    async def test_counters_are_not_asked_at_every_refresh(self):
+        gateway, port = await self.start(first_poll_delay_seconds=0, poll_interval_seconds=1)
+        reader, _ = await self.handshake(port)
+        seen = []
+        end = time.monotonic() + 3.6
+        while time.monotonic() < end:
+            with self.assertRaises(asyncio.TimeoutError) if False else contextlib_null():
+                message = await next_message(reader, 3)
+                seen.extend(k for k in message if k in ("REFRESH", "RSTAT"))
+        self.assertGreaterEqual(seen.count("REFRESH"), 3)
+        self.assertEqual(seen.count("RSTAT"), 1)
 
 
 class JournalModeTests(Base):

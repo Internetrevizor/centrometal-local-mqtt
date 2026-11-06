@@ -13,7 +13,8 @@ The module connects to `portal.centrometal.hr` on TCP 1883 using plain MQTT. You
 | Sent to the module | When |
 |---|---|
 | `_sync_ACK`, `PING_ACK`, `E*`/`W*` acknowledgements | as replies |
-| `REFRESH`, `RSTAT` (read requests) | every 240 s |
+| `REFRESH` (read request) | at `poll_interval_seconds`, default 240 s |
+| `RSTAT` (counters) | every 60 s at most |
 | `CMD` 0 or 1 | only when you use the switch |
 | `PRD` (read a setting) | after connecting and every hour |
 | `PWR` (write a setting) | only when you change one |

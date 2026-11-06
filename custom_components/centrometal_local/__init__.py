@@ -1,4 +1,5 @@
 """Centrometal Local MQTT Protocol: Home Assistant side of the local server."""
+import asyncio
 from datetime import timedelta
 import json
 import logging
@@ -26,7 +27,7 @@ def read_connection_file(path):
 class GatewayCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, host: str, port: int):
         super().__init__(hass, LOGGER, config_entry=entry, name="Centrometal Local MQTT Protocol",
-                         update_interval=timedelta(seconds=10))
+                         update_interval=timedelta(seconds=60))
         self.host, self.port, self.token = host, port, None
         self.connection_file = hass.config.path("custom_components", "centrometal_local", "gateway.json")
 
@@ -54,6 +55,24 @@ class GatewayCoordinator(DataUpdateCoordinator):
             await self.async_load_connection()
             raise UpdateFailed(f"Local server not reachable: {type(exc).__name__}") from exc
 
+    async def async_follow_changes(self) -> None:
+        """Holds a request open at the app, which answers as soon as the boiler sends something new."""
+        revision = -1
+        while True:
+            try:
+                async with async_get_clientsession(self.hass).get(
+                    f"http://{self.host}:{self.port}/status?since={revision}", headers=self._headers, timeout=ClientTimeout(total=40)
+                ) as response:
+                    response.raise_for_status()
+                    obj = await response.json()
+                if isinstance(obj, dict) and isinstance(obj.get("values"), dict):
+                    revision = obj.get("revision", revision)
+                    self.async_set_updated_data(obj)
+                continue
+            except (ClientError, TimeoutError, ValueError):
+                await self.async_load_connection()
+            await asyncio.sleep(5)
+
     async def async_send_command(self, value: int) -> bool:
         return await self._post("command", {"CMD": value})
 
@@ -76,6 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_create_background_task(hass, coordinator.async_follow_changes(), "centrometal_local follow changes")
     return True
 
 
