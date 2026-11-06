@@ -8,7 +8,14 @@
           "host": "Gateway API host",
           "port": "Gateway API port"
         }
+      },
+      "hassio_confirm": {
+        "title": "Centrometal Local MQTT Protocol",
+        "description": "Add the boiler served by the Centrometal Local MQTT Protocol app?"
       }
+    },
+    "abort": {
+      "already_configured": "This boiler is already configured."
     }
   }
 }

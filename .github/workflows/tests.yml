@@ -1,11 +1,48 @@
 name: Tests
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: python -B -m unittest discover -s tests -v
+
+  real-home-assistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install pytest-homeassistant-custom-component
+      - run: python -m pytest tests/ha -v
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands
+
+  image-starts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: cp -r custom_components centrometal_local_mqtt/integration
+      - run: docker build -t app centrometal_local_mqtt
+      - name: The image holds everything the app imports
+        run: docker run --rm app python3 -c "import sys; sys.path.insert(0, '/app'); import gateway; print(sorted(gateway.SETTINGS))"

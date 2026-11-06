@@ -11,9 +11,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .const import COMMAND_RESULT_EVENT
+
 LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
+PLATFORMS = ["binary_sensor", "button", "number", "sensor", "switch"]
 APP_SILENCE_TOLERATED_SECONDS = 120  # an update of the app takes about a minute: entities stay as they are meanwhile
+STREAM_SILENCE_SECONDS = 90  # the app sends a heartbeat every 30 s
+STREAM_RETRY_SECONDS = 5
+COMMAND_WAIT_SECONDS = 15  # usually confirmed in under a second; a reconnect is left to the app, which keeps trying
+POST_ATTEMPTS = 4
+POST_RETRY_SECONDS = 5
+FINISHED = ("confirmed", "unchanged", "expired", "replaced", "rate_limited")
 
 
 def read_connection_file(path):
@@ -31,20 +39,63 @@ class GatewayCoordinator(DataUpdateCoordinator):
         super().__init__(hass, LOGGER, config_entry=entry, name="Centrometal Local MQTT Protocol",
                          update_interval=timedelta(seconds=60))
         self.host, self.port, self.token = host, port, None
+        self.connection_source = "manual"
+        self._discovered = {"host": host, "port": port, "token": entry.data["token"]} if entry.data.get("token") else None
+        self._attempt = 0
         self._last_answer = None
+        self._values = {}
+        self._received = {}
+        self._reported_commands = None
         self.connection_file = hass.config.path("custom_components", "centrometal_local", "gateway.json")
 
     async def async_load_connection(self):
-        """The app can get a new address when it restarts, so this runs at start and after every failure."""
-        data = await self.hass.async_add_executor_job(read_connection_file, self.connection_file)
-        if data:
+        """Where the app is: what the Supervisor announced, or the file the app writes. A failure moves to the other one."""
+        from_file = await self.hass.async_add_executor_job(read_connection_file, self.connection_file)
+        sources = [(name, data) for name, data in (("discovery", self._discovered), ("file", from_file)) if data]
+        if sources:
+            self.connection_source, data = sources[self._attempt % len(sources)]
+            self._attempt += 1
             self.host, self.port, self.token = data["host"], data["port"], data.get("token")
 
     @property
     def _headers(self):
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
+    def _apply(self, event):
+        """Keeps every value and when it was last reported. A snapshot replaces all of it, a delta only adds."""
+        now = time.monotonic()
+        if event.get("type") == "delta":
+            self._values.update(event.get("values", {}))
+            self._received.update(dict.fromkeys([*event.get("values", {}), *event.get("seen", [])], now))
+        else:
+            self._values = dict(event["values"])
+            ages = event.get("value_age_seconds", {})
+            self._received = {key: now - ages.get(key, 0) for key in self._values}
+        self._last_answer = now
+        self._report_commands(event.get("commands"))
+        return self._build(event, now)
+
+    def _build(self, event, now):
+        return {**event, "values": self._values, "value_age_seconds": {k: round(now - t, 1) for k, t in self._received.items()}}
+
+    def _report_commands(self, commands):
+        """Each command that ended becomes an event once, so an automation or a notification can follow it."""
+        if not isinstance(commands, dict):
+            return
+        finished = {key: result for key, result in commands.items() if result.get("state") in FINISHED}
+        known = self._reported_commands
+        self._reported_commands = {key: result.get("id") for key, result in finished.items()}
+        if known is None:
+            return  # what ended before this connection is not news
+        for key, result in finished.items():
+            if known.get(key) != result.get("id"):
+                self.hass.bus.async_fire(COMMAND_RESULT_EVENT, {"command": key, **result})
+
     async def _async_update_data(self):
+        """The stream brings the data. This keeps the ages current, and reads directly when the stream is down."""
+        now = time.monotonic()
+        if self.data is not None and self._last_answer is not None and now - self._last_answer < STREAM_SILENCE_SECONDS:
+            return self._build(self.data, now)
         try:
             async with async_get_clientsession(self.hass).get(
                 f"http://{self.host}:{self.port}/status", headers=self._headers, timeout=ClientTimeout(total=5)
@@ -53,8 +104,7 @@ class GatewayCoordinator(DataUpdateCoordinator):
                 obj = await response.json()
                 if not isinstance(obj, dict) or not isinstance(obj.get("values"), dict):
                     raise UpdateFailed("Malformed gateway status")
-                self._last_answer = time.monotonic()
-                return obj
+                return self._apply(obj)
         except (ClientError, TimeoutError, ValueError) as exc:
             await self.async_load_connection()
             if self.data is not None and self._last_answer is not None \
@@ -63,38 +113,53 @@ class GatewayCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Local server not reachable: {type(exc).__name__}") from exc
 
     async def async_follow_changes(self) -> None:
-        """Holds a request open at the app, which answers as soon as the boiler sends something new."""
-        revision = -1
+        """Keeps a stream open to the app, which sends what changes as soon as the boiler reports it."""
         while True:
             try:
-                async with async_get_clientsession(self.hass).get(
-                    f"http://{self.host}:{self.port}/status?since={revision}", headers=self._headers, timeout=ClientTimeout(total=40)
+                await self._read_stream()
+            except (ClientError, TimeoutError, ValueError) as exc:
+                LOGGER.debug("Stream from the local server ended: %s", type(exc).__name__)
+                await self.async_load_connection()
+            await asyncio.sleep(STREAM_RETRY_SECONDS)
+
+    async def _read_stream(self) -> None:
+        async with async_get_clientsession(self.hass).get(
+            f"http://{self.host}:{self.port}/events", headers=self._headers,
+            timeout=ClientTimeout(total=None, sock_connect=5, sock_read=STREAM_SILENCE_SECONDS)
+        ) as response:
+            response.raise_for_status()
+            async for line in response.content:
+                if not line.startswith(b"data: "):
+                    continue
+                event = json.loads(line[6:])
+                if isinstance(event, dict) and (event.get("type") == "delta" or isinstance(event.get("values"), dict)):
+                    self.async_set_updated_data(self._apply(event))
+
+    async def async_send_command(self, value: int):
+        return await self._post("command", {"CMD": value, "wait": COMMAND_WAIT_SECONDS})
+
+    async def async_send_setting(self, slot: int, value: float):
+        return await self._post("setting", {"slot": slot, "value": value, "wait": COMMAND_WAIT_SECONDS})
+
+    async def async_clear_alarms(self):
+        return await self._post("alarms/clear", {})
+
+    async def _post(self, path: str, body: dict):
+        """What came of the request, or None when the app did not answer. Only a missing app is worth trying again here:
+        everything else, the app already keeps trying or has already decided."""
+        for attempt in range(POST_ATTEMPTS):
+            try:
+                async with async_get_clientsession(self.hass).post(
+                    f"http://{self.host}:{self.port}/{path}", json=body, headers=self._headers,
+                    timeout=ClientTimeout(total=COMMAND_WAIT_SECONDS + 5)
                 ) as response:
-                    response.raise_for_status()
-                    obj = await response.json()
-                if isinstance(obj, dict) and isinstance(obj.get("values"), dict):
-                    revision = obj.get("revision", revision)
-                    self._last_answer = time.monotonic()
-                    self.async_set_updated_data(obj)
-                continue
+                    answer = await response.json(content_type=None)
+                    return answer if isinstance(answer, dict) else {}
             except (ClientError, TimeoutError, ValueError):
                 await self.async_load_connection()
-            await asyncio.sleep(5)
-
-    async def async_send_command(self, value: int) -> bool:
-        return await self._post("command", {"CMD": value})
-
-    async def async_send_setting(self, slot: int, value: float) -> bool:
-        return await self._post("setting", {"slot": slot, "value": value})
-
-    async def _post(self, path: str, body: dict) -> bool:
-        try:
-            async with async_get_clientsession(self.hass).post(
-                f"http://{self.host}:{self.port}/{path}", json=body, headers=self._headers, timeout=ClientTimeout(total=5)
-            ) as response:
-                return response.status == 200
-        except (ClientError, TimeoutError):
-            return False
+                if attempt < POST_ATTEMPTS - 1:
+                    await asyncio.sleep(POST_RETRY_SECONDS)
+        return None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

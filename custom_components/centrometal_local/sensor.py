@@ -5,7 +5,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import GATEWAY_ENTITY_ID, HISTORY_ENTITY_ID, display_value, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
+from .parameters import COUNTER_SENSORS, GATEWAY_ENTITY_ID, HISTORY_ENTITY_ID, display_value, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
 
 
 def device_info(entry_id):
@@ -26,7 +26,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             seen.update(keys)
             async_add_entities([PelTecValue(coordinator, entry.entry_id, key) for key in keys])
 
-    async_add_entities([BridgeStatus(coordinator, entry.entry_id), EventHistory(coordinator, entry.entry_id)])
+    async_add_entities([BridgeStatus(coordinator, entry.entry_id), EventHistory(coordinator, entry.entry_id),
+                        *(GatewayCounter(coordinator, entry.entry_id, key) for key in COUNTER_SENSORS)])
     add_keys()
     entry.async_on_unload(coordinator.async_add_listener(add_keys))
 
@@ -50,11 +51,32 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         d = self.coordinator.data or {}
         attributes = {k: d.get(k) for k in ("module_connected", "upstream_connected", "data_fresh", "connection_mode",
-                                            "read_interval_seconds", "invalid_messages", "malformed_frames", "last_malformed",
-                                            "last_command", "pending_command", "sessions_closed", "last_session_end",
-                                            "last_session_end_time", "rejected_ip")}
+                                            "read_interval_seconds", "invalid_messages", "rejected_values", "malformed_frames",
+                                            "last_malformed", "last_command", "pending_command", "commands",
+                                            "sessions_closed", "close_reasons", "last_session_end",
+                                            "last_session_end_time", "identity_changes", "rejected_ip")}
         attributes["parameters"] = len(d.get("values") or {})
+        attributes["connection_source"] = self.coordinator.connection_source
         return attributes
+
+
+class GatewayCounter(CoordinatorEntity, SensorEntity):
+    """Kept by the app across restarts, and as a sensor it stays in the long-term history."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, coordinator, entry_id, key):
+        super().__init__(coordinator)
+        self.key = key
+        self._attr_name, self.entity_id = COUNTER_SENSORS[key]
+        self._attr_unique_id = f"{entry_id}_counter_{key}"
+        self._attr_device_info = device_info(entry_id)
+
+    @property
+    def native_value(self):
+        return (self.coordinator.data or {}).get(self.key)
 
 
 class EventHistory(CoordinatorEntity, SensorEntity):

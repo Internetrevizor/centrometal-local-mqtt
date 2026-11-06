@@ -13,7 +13,7 @@ The module connects to `portal.centrometal.hr` on TCP 1883 using plain MQTT. You
 | Sent to the module | When |
 |---|---|
 | `_sync_ACK`, `PING_ACK`, `E*`/`W*` acknowledgements | as replies |
-| `REFRESH` (read request) | every `read_interval_seconds`, default 10 s |
+| `REFRESH` (read request) | every `read_interval_seconds`, default 60 s |
 | `RSTAT` (counters) | every 60 s at most |
 | `CMD` 0 or 1 | only when you use the switch |
 | `PRD` (read a setting) | after connecting and every hour |
@@ -21,7 +21,23 @@ The module connects to `portal.centrometal.hr` on TCP 1883 using plain MQTT. You
 
 With the burner on, the module also sends the fast values by itself when they change (boiler, flue gas, return, lambda, stage). With the burner off it sends almost nothing unless asked, so the read interval sets how fresh the readings are. The cloud integration asks every 240 s, which is why it shows many values at that pace.
 
-Nothing else can be sent. Settings can be written only for the seven known slots, within the limits of the controller.
+Nothing else can be sent. Settings can be written only for the known slots, within the limits of the controller.
+
+The app watches its own session. A module that connects but never completes the handshake (30 s), or that stays silent for 3 minutes while its TCP connection looks alive, is disconnected, and it reconnects within seconds. Text the boiler's controller leaks into the stream (`AT+CWLIF`) is skipped and counted.
+
+## Commands
+
+A command is finished only when the boiler says so. The switch waits up to 15 s for the module to report the requested value; the app keeps trying for 90 s, across reconnects, and the result is one of:
+
+| Result | Meaning |
+|---|---|
+| `confirmed` | the module reported the requested value |
+| `unchanged` | a setting the controller reported holding that value in the last 2 minutes: nothing is written |
+| `expired` | no confirmation in 90 s. The boiler may or may not have received it |
+| `replaced` | a newer request for the same thing took its place |
+| `rate_limited` | refused: more than 6 writes to one setting in 10 minutes |
+
+Each result is fired as the event `centrometal_local_command_result` and shown in the `commands` attribute of `Gateway State`, so an automation can react to it. CMD is repeated every 5 s until confirmed. PWR is written at most 3 times per request.
 
 ## What you get
 
@@ -31,7 +47,8 @@ Every parameter the boiler sends becomes a sensor, with English names and the sa
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
 - `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
-- `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
+- `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II, so `button.peltec_ii_lambda_clear_alarms` ends an alarm by hand. If it is still real, it comes back.
+- `sensor.peltec_ii_lambda_sessions_closed`, `_malformed_frames`, `_commands_expired`: counters that survive restarts and stay in the long-term history. `Gateway State` also shows `close_reasons`, and the integration offers Download diagnostics, without the token.
 
 To keep the same entity_ids in `local` mode, remove the cloud integration before adding this one.
 
@@ -41,18 +58,17 @@ To keep the same entity_ids in `local` mode, remove the cloud integration before
 |---|---|---|---|
 | `local` (default) | Stop seeing the boiler | Always, also with no internet | Yes |
 | `cloud_proxy` (bypass) | Keep working | A copy of what passes through | No, use the portal or the cloud integration |
-| `cloud_proxy_fallback` | Keep working while the portal answers | Always | Only while the portal is down; it returns by itself when the portal is back |
 
 **Before you choose:**
 - In every mode the module's traffic goes through Home Assistant. If Home Assistant is down, the module reaches neither this server nor the portal; only the boiler's own panel remains. If you want the cloud to be independent of Home Assistant, do not install this at all.
 - `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
 - Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
 
-Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has only been tested in software.
+Tested on one real boiler: `local` and `cloud_proxy`. The `cloud_proxy_fallback` mode of earlier versions was never tried on a boiler and has been removed; choose another mode before updating, or the app will not start.
 
 ## Requirements
 
-- Home Assistant OS or Supervised (for the app).
+- Home Assistant OS or Supervised on a 64-bit system (for the app): aarch64 or amd64.
 - TCP 1883 free on the Home Assistant host. Port 1883 is the only one the app publishes.
 - A fixed IP for the boiler's module (DHCP reservation).
 - A firewall or gateway able to redirect traffic for one device. **This redirection is required: without it the module keeps talking to the cloud and this project receives nothing.**
@@ -61,7 +77,7 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 
 1. **Add the repository.** Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
 2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it. The app installs the Home Assistant integration by itself.
-3. **Restart Home Assistant once** and add the integration Centrometal Local MQTT Protocol. Keep the host and port as they are: the integration finds the app and its access token by itself.
+3. **Restart Home Assistant once.** The app announces itself, and Centrometal Local MQTT Protocol appears under Discovered in Settings → Devices & services: confirm it. Nothing has to be typed. If the announcement does not arrive, add the integration by hand and keep the host and port as they are: it also finds the app through a file the app writes.
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:
 
    | Field | Value |
@@ -84,9 +100,9 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 | Option | Meaning |
 |---|---|
 | `module_ip` | Only this IP is accepted |
-| `connection_mode` | `local`, `cloud_proxy` or `cloud_proxy_fallback`, see above |
-| `upstream_host` | The portal's name, used only by the two proxy modes |
-| `read_interval_seconds` | Time between read requests, 10 to 240, default 10. One answer is about 1.3 kB |
+| `connection_mode` | `local` or `cloud_proxy`, see above |
+| `upstream_host` | The portal's name, used only by `cloud_proxy` |
+| `read_interval_seconds` | Time between read requests, 10 to 240, default 60. One answer is about 1.3 kB. What matters during a burn arrives by itself |
 | `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without password, token or signature. Normally only new parameter names and session events are written |
 
 ## Going back
@@ -95,7 +111,18 @@ Disable the redirection rule, then restart the app. The module reconnects to the
 
 ## Security
 
-The module talks to the server over unencrypted MQTT and does not authenticate the server beyond a signature whose key derivation is already public. That is what makes this project possible, and it also means anyone able to redirect this traffic could do the same. Keep the module on a separate network, and never expose TCP 1883 to the internet. The app runs under its own AppArmor profile, and its internal API needs a token generated at the first start.
+The module talks to the server over unencrypted MQTT and does not authenticate the server beyond a signature whose key derivation is already public. That is what makes this project possible, and it also means anyone able to redirect this traffic could do the same. Keep the module on a separate network, and never expose TCP 1883 to the internet. The app runs under its own AppArmor profile, and its internal API needs a token generated at the first start. The password in the module's CONNECT is also its signing key, so a signature alone does not prove who is at the other end: the only gate is `module_ip`. The app remembers a salted fingerprint of the first module it sees, and counts in `identity_changes` any other that connects.
+
+## Development
+
+```
+python -B -m unittest discover -s tests                  # the app and the integration's own logic, standard library only
+pip install pytest-homeassistant-custom-component && python -m pytest   # the integration inside a real Home Assistant, Linux or macOS
+```
+
+`protocol.py`, `session.py`, `commands.py` and `store.py` touch no socket and take the time from outside, so `tests/test_session.py` runs a day of traffic in a moment. `tests/data/module_messages.jsonl` holds real messages of the boiler: numbers and stages only. `PELTEC_PCAP` points the capture tests to a private capture.
+
+The image is built by GitHub Actions and has to exist before a new `version` reaches `main`, because the store offers it from there. `custom_components/centrometal_local/parameters.py` is the only list of parameters and writable slots: the app takes it from there at build time.
 
 ## Disclaimer
 
