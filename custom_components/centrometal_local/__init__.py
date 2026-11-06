@@ -8,13 +8,16 @@ import time
 from aiohttp import ClientError, ClientTimeout
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import COMMAND_RESULT_EVENT
+from .const import COMMAND_RESULT_EVENT, DOMAIN
+from .parameters import API_VERSION
 
 LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["binary_sensor", "button", "number", "sensor", "switch"]
+API_ISSUE = "app_version_mismatch"
+PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
 APP_SILENCE_TOLERATED_SECONDS = 120  # an update of the app takes about a minute: entities stay as they are meanwhile
 STREAM_SILENCE_SECONDS = 90  # the app sends a heartbeat every 30 s
 STREAM_RETRY_SECONDS = 5
@@ -24,38 +27,15 @@ POST_RETRY_SECONDS = 5
 FINISHED = ("confirmed", "unchanged", "expired", "replaced", "rate_limited")
 
 
-def read_connection_file(path):
-    """The address and token the app wrote at its last start, or None when there is no such file."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) and data.get("host") and data.get("port") else None
-    except (OSError, ValueError):
-        return None
-
-
 class GatewayCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, host: str, port: int):
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         super().__init__(hass, LOGGER, config_entry=entry, name="Centrometal Local MQTT Protocol",
                          update_interval=timedelta(seconds=60))
-        self.host, self.port, self.token = host, port, None
-        self.connection_source = "manual"
-        self._discovered = {"host": host, "port": port, "token": entry.data["token"]} if entry.data.get("token") else None
-        self._attempt = 0
+        self.host, self.port, self.token = entry.data["host"], entry.data["port"], entry.data.get("token")
         self._last_answer = None
         self._values = {}
         self._received = {}
         self._reported_commands = None
-        self.connection_file = hass.config.path("custom_components", "centrometal_local", "gateway.json")
-
-    async def async_load_connection(self):
-        """Where the app is: what the Supervisor announced, or the file the app writes. A failure moves to the other one."""
-        from_file = await self.hass.async_add_executor_job(read_connection_file, self.connection_file)
-        sources = [(name, data) for name, data in (("discovery", self._discovered), ("file", from_file)) if data]
-        if sources:
-            self.connection_source, data = sources[self._attempt % len(sources)]
-            self._attempt += 1
-            self.host, self.port, self.token = data["host"], data["port"], data.get("token")
 
     @property
     def _headers(self):
@@ -71,9 +51,18 @@ class GatewayCoordinator(DataUpdateCoordinator):
             self._values = dict(event["values"])
             ages = event.get("value_age_seconds", {})
             self._received = {key: now - ages.get(key, 0) for key in self._values}
+            self._check_api_version(event.get("api_version"))
         self._last_answer = now
         self._report_commands(event.get("commands"))
         return self._build(event, now)
+
+    def _check_api_version(self, version):
+        """The app and the integration update separately. When they no longer understand each other, the user has to know."""
+        if version == API_VERSION:
+            ir.async_delete_issue(self.hass, DOMAIN, API_ISSUE)
+        else:
+            ir.async_create_issue(self.hass, DOMAIN, API_ISSUE, is_fixable=False, severity=ir.IssueSeverity.WARNING,
+                                  translation_key=API_ISSUE)
 
     def _build(self, event, now):
         return {**event, "values": self._values, "value_age_seconds": {k: round(now - t, 1) for k, t in self._received.items()}}
@@ -106,7 +95,6 @@ class GatewayCoordinator(DataUpdateCoordinator):
                     raise UpdateFailed("Malformed gateway status")
                 return self._apply(obj)
         except (ClientError, TimeoutError, ValueError) as exc:
-            await self.async_load_connection()
             if self.data is not None and self._last_answer is not None \
                     and time.monotonic() - self._last_answer < APP_SILENCE_TOLERATED_SECONDS:
                 return self.data
@@ -119,7 +107,6 @@ class GatewayCoordinator(DataUpdateCoordinator):
                 await self._read_stream()
             except (ClientError, TimeoutError, ValueError) as exc:
                 LOGGER.debug("Stream from the local server ended: %s", type(exc).__name__)
-                await self.async_load_connection()
             await asyncio.sleep(STREAM_RETRY_SECONDS)
 
     async def _read_stream(self) -> None:
@@ -141,9 +128,6 @@ class GatewayCoordinator(DataUpdateCoordinator):
     async def async_send_setting(self, slot: int, value: float):
         return await self._post("setting", {"slot": slot, "value": value, "wait": COMMAND_WAIT_SECONDS})
 
-    async def async_clear_alarms(self):
-        return await self._post("alarms/clear", {})
-
     async def _post(self, path: str, body: dict):
         """What came of the request, or None when the app did not answer. Only a missing app is worth trying again here:
         everything else, the app already keeps trying or has already decided."""
@@ -156,15 +140,13 @@ class GatewayCoordinator(DataUpdateCoordinator):
                     answer = await response.json(content_type=None)
                     return answer if isinstance(answer, dict) else {}
             except (ClientError, TimeoutError, ValueError):
-                await self.async_load_connection()
                 if attempt < POST_ATTEMPTS - 1:
                     await asyncio.sleep(POST_RETRY_SECONDS)
         return None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    coordinator = GatewayCoordinator(hass, entry, entry.data["host"], entry.data["port"])
-    await coordinator.async_load_connection()
+    coordinator = GatewayCoordinator(hass, entry)
     await coordinator.async_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

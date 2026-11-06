@@ -219,12 +219,9 @@ class State:
             with contextlib.suppress(OSError):
                 atomic_write(self.alarm_path, json.dumps({"active": self.active_alarms, "history": self.alarm_history}))
 
-    def _add_alarm_event(self, code: str, value: Any) -> None:
-        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-        self.alarm_history = self.alarm_history[-ALARM_HISTORY:]
-
     def _note_alarm(self, code: str, value: Any) -> None:
-        """A value starting with P means the alarm has passed (scr34m); not yet seen on a PelTec II."""
+        """Alarms only come from the boiler: nothing here can end one. A value starting with P means it has passed (scr34m);
+        not yet seen on a PelTec II."""
         cleared = str(value).startswith("P")
         known = self.active_alarms.get(code)
         if (cleared and code not in self.active_alarms) or (not cleared and known == value):
@@ -233,18 +230,9 @@ class State:
             self.active_alarms.pop(code, None)
         elif not code.startswith("I"):
             self.active_alarms[code] = value
-        self._add_alarm_event(code, value)
+        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        self.alarm_history = self.alarm_history[-ALARM_HISTORY:]
         self._save_alarms()
-
-    def clear_alarms(self) -> int:
-        """Nobody has seen how a PelTec II ends an alarm yet, so a person has to be able to. If it is still real, it comes back."""
-        cleared = sorted(self.active_alarms)
-        for code in cleared:
-            self._add_alarm_event(code, "cleared by user")
-        self.active_alarms.clear()
-        self._save_alarms()
-        self.mark_changed()
-        return len(cleared)
 
     def note_module_identity(self, client_id: bytes, password: bytes) -> None:
         if not self.identity.check(client_id, password):

@@ -47,7 +47,7 @@ Every parameter the boiler sends becomes a sensor, with English names and the sa
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
 - `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
-- `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II, so `button.peltec_ii_lambda_clear_alarms` ends an alarm by hand. If it is still real, it comes back.
+- `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. Alarms are read only: nothing here can end one. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
 - `sensor.peltec_ii_lambda_sessions_closed`, `_malformed_frames`, `_commands_expired`: counters that survive restarts and stay in the long-term history. `Gateway State` also shows `close_reasons`, and the integration offers Download diagnostics, without the token.
 
 To keep the same entity_ids in `local` mode, remove the cloud integration before adding this one.
@@ -76,8 +76,9 @@ Tested on one real boiler: `local` and `cloud_proxy`. The `cloud_proxy_fallback`
 ## Installation
 
 1. **Add the repository.** Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
-2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it. The app installs the Home Assistant integration by itself.
-3. **Restart Home Assistant once.** The app announces itself, and Centrometal Local MQTT Protocol appears under Discovered in Settings → Devices & services: confirm it. Nothing has to be typed. If the announcement does not arrive, add the integration by hand and keep the host and port as they are: it also finds the app through a file the app writes.
+2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it.
+3. **Install the integration with HACS.** HACS → ⋮ → Custom repositories, add the same URL with the type Integration, then download Centrometal Local MQTT Protocol and restart Home Assistant. HACS installs integrations only, which is why the app comes from the app store.
+   The app announces itself: the boiler appears under Discovered in Settings → Devices & services. Confirm it, nothing has to be typed.
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:
 
    | Field | Value |
@@ -94,6 +95,10 @@ Tested on one real boiler: `local` and `cloud_proxy`. The `cloud_proxy_fallback`
 5. **Check.** `Gateway state` shows `local`, and temperatures update within seconds.
 
 **Working without internet:** the module looks up the portal's name each time it reconnects. If your DNS server cannot answer with the internet down, add a local DNS record for `portal.centrometal.hr` pointing to the same portal IP.
+
+## Updates
+
+The app updates from the app store and the integration from HACS, separately. Update both to the same version. A pair that no longer understands each other raises a repair notice in Home Assistant.
 
 ## Options
 
@@ -122,7 +127,7 @@ pip install pytest-homeassistant-custom-component && python -m pytest   # the in
 
 `protocol.py`, `session.py`, `commands.py` and `store.py` touch no socket and take the time from outside, so `tests/test_session.py` runs a day of traffic in a moment. `tests/data/module_messages.jsonl` holds real messages of the boiler: numbers and stages only. `PELTEC_PCAP` points the capture tests to a private capture.
 
-The image is built by GitHub Actions and has to exist before a new `version` reaches `main`, because the store offers it from there. `custom_components/centrometal_local/parameters.py` is the only list of parameters and writable slots: the app takes it from there at build time.
+The image is built by GitHub Actions and has to exist before a new `version` reaches `main`, because the store offers it from there. A tag `v*` publishes the GitHub release that HACS reads. `custom_components/centrometal_local/parameters.py` is the only list of parameters and writable slots: the app takes it from there at build time.
 
 ## Disclaimer
 

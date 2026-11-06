@@ -36,13 +36,12 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          ignore: brands description topics # settings of the GitHub repository, not of this code
 
   image-starts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: cp -r custom_components centrometal_local_mqtt/integration
+      - run: cp custom_components/centrometal_local/parameters.py centrometal_local_mqtt/
       - run: docker build -t app centrometal_local_mqtt
       - name: The app starts and answers under its real AppArmor profile
         run: |

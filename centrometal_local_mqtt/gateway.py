@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import secrets
-import shutil
 import signal
 import socket
 import time
@@ -32,7 +31,7 @@ from http import HTTPStatus
 from typing import Any
 
 from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
-from parameters import LIMITS, setting_key
+from parameters import API_VERSION, LIMITS, setting_key
 from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
     MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
     varint, verify_payload,
@@ -195,8 +194,6 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
         elif method == "POST" and path == "/setting":
             request = json.loads(body) if body else {}
             status, data = await gateway.api_result(gateway.request_setting(request.get("slot"), request.get("value")), request.get("wait"))
-        elif method == "POST" and path == "/alarms/clear":
-            status, data = HTTPStatus.OK, json.dumps({"cleared": gateway.state.clear_alarms()}).encode()
         writer.write(_answer(status, data))
         await writer.drain()
     except (ValueError, UnicodeError, OSError, AttributeError, asyncio.IncompleteReadError):
@@ -237,7 +234,8 @@ class Gateway:
 
     def _command_status(self) -> dict[str, Any]:
         self.commands.expire(time.monotonic())
-        return {"connection_mode": self.config["connection_mode"],
+        return {"api_version": API_VERSION,
+                "connection_mode": self.config["connection_mode"],
                 "read_interval_seconds": self.config["read_interval_seconds"],
                 "pending_command": self.commands.pending_power(),
                 "commands": self.commands.summary()}
@@ -478,7 +476,7 @@ class Gateway:
             await asyncio.to_thread(self.state.write_values, self.state.values_payload())
 
     async def _announce(self) -> None:
-        """Tells Home Assistant where the app is. If this never works, the connection file still does the job."""
+        """Tells Home Assistant where the app and its token are: the only way the integration learns them."""
         announced = self.config.get("announce")
         if not announced:
             return
@@ -506,7 +504,6 @@ class Gateway:
         LOG.info("Stopping")
         for task in background:
             task.cancel()
-        self.state.save_values()
         server.close()
         api.close()
         current = self._current
@@ -514,35 +511,7 @@ class Gateway:
             current.writer.transport.abort()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(current.done.wait(), 2)
-
-
-def same_content(first: str, second: str) -> bool:
-    with open(first, "rb") as one, open(second, "rb") as other:
-        return one.read() == other.read()
-
-
-def install_integration(source: str = "/app/integration/centrometal_local",
-                        target: str = "/homeassistant/custom_components/centrometal_local") -> bool:
-    """Puts the Home Assistant integration in place, so the app is the only thing to install. True when files changed."""
-    try:
-        if not os.path.isdir(source) or not os.path.isdir(os.path.dirname(os.path.dirname(target))):
-            return False
-        changed = False
-        for folder, _, names in os.walk(source):
-            destination = os.path.join(target, os.path.relpath(folder, source))
-            for name in names:
-                old, new = os.path.join(folder, name), os.path.join(destination, name)
-                if os.path.exists(new) and same_content(old, new):
-                    continue
-                os.makedirs(destination, exist_ok=True)
-                shutil.copyfile(old, new)
-                changed = True
-        if changed:
-            LOG.warning("Integration installed or updated: restart Home Assistant, then add Centrometal Local MQTT Protocol")
-        return changed
-    except OSError as exc:
-        LOG.warning("Could not install the integration: %s", type(exc).__name__)
-        return False
+        self.state.save_values()  # last: closing the session above still changes the counters
 
 
 def api_token(path: str = "/data/api_token") -> str:
@@ -557,24 +526,6 @@ def api_token(path: str = "/data/api_token") -> str:
     token = secrets.token_urlsafe(32)
     atomic_write(path, token)
     return token
-
-
-def own_address() -> str:
-    """This container's address on the internal network; the target is not actually contacted."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.connect(("172.30.32.1", 80))
-        return sock.getsockname()[0]
-
-
-def write_connection_file(port: int, token: str, address: str,
-                          target: str = "/homeassistant/custom_components/centrometal_local/gateway.json") -> None:
-    """Tells the integration how to reach this app, so nothing has to be typed. Written again at every start."""
-    try:
-        if not os.path.isdir(os.path.dirname(target)):
-            return
-        atomic_write(target, json.dumps({"host": address, "port": port, "token": token}), 0o600)
-    except OSError as exc:
-        LOG.warning("Could not write the connection file: %s", type(exc).__name__)
 
 
 def send_discovery(url: str, supervisor_token: str, host: str, port: int, token: str, timeout: float = 10) -> bool:
@@ -627,8 +578,6 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load_config(args.config)
     config["api_token"] = api_token()
-    install_integration()
-    write_connection_file(config["api_port"], config["api_token"], own_address())
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if supervisor_token:
         config["announce"] = {"url": "http://supervisor/discovery", "supervisor_token": supervisor_token,

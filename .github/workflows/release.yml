@@ -1,0 +1,23 @@
+name: Release
+
+# HACS takes versions from GitHub releases: a tag alone is not enough.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: The tag, the integration and the app have the same version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "\"version\": \"$version\"" custom_components/centrometal_local/manifest.json
+          grep -q "^version: $version$" centrometal_local_mqtt/config.yaml
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

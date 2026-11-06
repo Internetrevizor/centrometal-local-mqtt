@@ -56,7 +56,6 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
                                             "sessions_closed", "close_reasons", "last_session_end",
                                             "last_session_end_time", "identity_changes", "rejected_ip")}
         attributes["parameters"] = len(d.get("values") or {})
-        attributes["connection_source"] = self.coordinator.connection_source
         return attributes
 
 
