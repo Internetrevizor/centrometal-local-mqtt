@@ -47,6 +47,9 @@ JOURNAL_PATH = "/share/centrometal_local_mqtt/journal.jsonl"
 DATA_FRESH_SECONDS = 480
 SETTINGS_READ_SECONDS = 3600
 ALARM_HISTORY = 50
+COUNTERS_READ_SECONDS = 60  # counters move slowly: RSTAT does not follow a short poll interval
+LONG_POLL_SECONDS = 25
+BURST_SECONDS = 0.3  # the module sends a dump in several messages: answer once, not once per message
 # Writable slots of a PelTec II Lambda, with the controller's own limits (min, max), read from the portal 06.11.2026.
 SETTINGS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 272: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
 JOURNAL_MAX_BYTES = 10_000_000
@@ -273,6 +276,8 @@ class State:
     def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None) -> None:
         self.journal = journal
         self.alarm_path = alarm_path
+        self.revision = 0
+        self._changed = asyncio.Event()
         self.active_alarms: dict[str, Any] = {}
         self.alarm_history: list[dict[str, Any]] = []
         self._load_alarms()
@@ -294,6 +299,18 @@ class State:
         self.last_command = ""
         self.last_session_end = ""
         self.rejected_ip = ""
+
+    def mark_changed(self) -> None:
+        self.revision += 1
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+    async def wait_for_change(self, since: int, timeout: float) -> None:
+        """Returns as soon as there is something newer than `since`, or after the timeout."""
+        if since == self.revision:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._changed.wait(), timeout)
+            await asyncio.sleep(BURST_SECONDS)
 
     def _load_alarms(self) -> None:
         """Alarms survive a restart of the app: the boiler may not repeat them."""
@@ -351,6 +368,7 @@ class State:
                     self.values.pop(key, None)
                     self.value_times.pop(key, None)
             self.last_update_unix = now
+            self.mark_changed()
 
     def note_downlink(self, message: dict[str, Any]) -> None:
         clean = redact(message)
@@ -367,6 +385,7 @@ class State:
         now = time.time()
         stamp = lambda v: datetime.fromtimestamp(v, timezone.utc).isoformat() if v else None  # noqa: E731
         return {
+            "revision": self.revision,
             "mode": self.mode,
             "module_connected": self.module_connected,
             "upstream_connected": self.upstream_connected,
@@ -471,7 +490,9 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
         allowed = not token or hmac.compare_digest(authorization, f"Bearer {token}".encode())
         if path != "/health" and not allowed:
             status = HTTPStatus.UNAUTHORIZED
-        elif method == "GET" and path == "/status":
+        elif method == "GET" and (path == "/status" or path.startswith("/status?since=")):
+            if "?since=" in path:
+                await gateway.state.wait_for_change(int(path.split("=", 1)[1]), gateway.config.get("long_poll_seconds", LONG_POLL_SECONDS))
             status, data = HTTPStatus.OK, json.dumps(gateway.state.snapshot()).encode()
         elif method == "GET" and path == "/health":
             status, data = HTTPStatus.OK, b'{"status":"ok"}'
@@ -643,6 +664,7 @@ class Gateway:
         sync_ok = False
         next_refresh: float | None = None
         rstat_at: float | None = None
+        next_counters = 0.0
         poll_interval = self.config["poll_interval_seconds"]
         pending = initial
 
@@ -751,7 +773,9 @@ class Gateway:
             now = time.monotonic()
             if next_refresh is not None and now >= next_refresh:
                 request("REFRESH", 0)
-                rstat_at = now + RSTAT_DELAY
+                if now >= next_counters:
+                    rstat_at = now + RSTAT_DELAY
+                    next_counters = now + COUNTERS_READ_SECONDS
                 next_refresh = now + poll_interval
                 await writer.drain()
             if next_settings is not None and now >= next_settings:
