@@ -280,5 +280,11 @@ def enabled_by_default(key):
     return key != "B_Ths1" and parameter_info(key)[1] != "raw"
 
 
+def commands_available(status):
+    """Commands wait for the module during a short reconnect in local mode, so a session gap does not take them away."""
+    status = status or {}
+    return (status.get("connection_mode") == "local" or status.get("mode") == "local") and bool(status.get("data_fresh"))
+
+
 def is_fresh(age):
     return isinstance(age, (int, float)) and age < MAX_AGE_SECONDS

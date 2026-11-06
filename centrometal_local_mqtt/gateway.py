@@ -52,6 +52,11 @@ LONG_POLL_SECONDS = 25
 BURST_SECONDS = 0.3  # the module sends a dump in several messages: answer once, not once per message
 # Writable slots of a PelTec II Lambda, with the controller's own limits (min, max), read from the portal 06.11.2026.
 SETTINGS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 272: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
+MAX_MODULE_FRAME = 4096  # the largest real message is about 300 bytes
+COMMAND_RETRY_SECONDS = 5
+COMMAND_GIVE_UP_SECONDS = 90  # a dead link takes 60 s to notice, then the module reconnects within seconds
+VALUES_SAVE_SECONDS = 300
+READ_INTERVAL_SECONDS = 10
 JOURNAL_MAX_BYTES = 10_000_000
 JOURNAL_KEEP = 3
 RSTAT_DELAY = 1.0  # same spacing as the integration: REFRESH, 1 s, RSTAT
@@ -216,6 +221,51 @@ def tune_socket(writer: asyncio.StreamWriter) -> None:
                 sock.setsockopt(socket.IPPROTO_TCP, option, value)
 
 
+def module_frame_end(buf: bytearray) -> int | None:
+    """End of the MQTT frame at the start of buf; None when more bytes are needed; -1 when this is not a frame."""
+    head = buf[0]
+    kind = head >> 4
+    if not (head in (0x10, 0x40, 0x82, 0xC0, 0xE0) or (kind == 3 and (head >> 1) & 3 != 3)):
+        return -1
+    length, shift = 0, 0
+    for idx in range(1, 4):
+        if idx >= len(buf):
+            return None
+        length |= (buf[idx] & 127) << shift
+        shift += 7
+        if not buf[idx] & 128:
+            break
+    else:
+        return -1
+    if length > MAX_MODULE_FRAME:
+        return -1
+    if (head in (0xC0, 0xE0) and length != 0) or (head == 0x40 and length != 2) or (head == 0x82 and length < 5):
+        return -1
+    start, end = idx + 1, idx + 1 + length
+    body = bytes(buf[start:end])
+    if head == 0x10 and not body.startswith(b"\x00\x04MQTT"[:len(body)]):
+        return -1
+    if kind == 3:
+        if length < 5:
+            return -1
+        if len(body) >= 2:
+            size = int.from_bytes(body[:2], "big")
+            if size < 3 or 2 + size > length or not body[2:5].startswith(b"cm."[:len(body[2:5])]):
+                return -1
+    if end > len(buf):
+        return None
+    try:
+        if kind == 3:
+            payload = get_publish(head, body)[1]
+            if not payload.startswith(b"{") or not payload.endswith(b"}") or b"cm.inst." in payload:
+                return -1  # cut: the declared length ran over into what came next
+        elif head == 0x82:
+            subscribe_packet(body)
+    except ValueError:
+        return -1
+    return end
+
+
 def redact(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k not in ("_sign", "_token")}
 
@@ -231,6 +281,41 @@ class MQTTFrames:
         result = []
         while (item := extract_frame(self.buf)) is not None:
             result.append(item)
+        return result
+
+
+class ModuleFrames(MQTTFrames):
+    """The stream from the module, which is not always clean MQTT.
+
+    The boiler's controller drives its WiFi chip with AT commands, and these sometimes land in the TCP stream: the capture
+    ends with a frame followed by AT+CWLIF repeated, right before the portal resets the connection. Read as MQTT that text
+    is a frame of random length that swallows real messages. Here only what looks like a real frame is accepted, and
+    everything else is skipped byte by byte, so the stream finds its way back at the next message.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.skipped = bytearray()
+        self.runs = 0
+        self._in_run = False
+
+    def feed(self, data: bytes) -> list[tuple[int, bytes]]:
+        self.buf.extend(data)
+        result = []
+        while self.buf:
+            end = module_frame_end(self.buf)
+            if end is None:
+                break
+            if end < 0:
+                if not self._in_run:
+                    self._in_run = True
+                    self.runs += 1
+                if len(self.skipped) < 4096:
+                    self.skipped.append(self.buf[0])
+                del self.buf[0]
+                continue
+            self._in_run = False
+            result.append(extract_frame(self.buf))
         return result
 
 
@@ -273,9 +358,11 @@ class Journal:
 
 
 class State:
-    def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None) -> None:
+    def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None,
+                 values_path: str | None = None) -> None:
         self.journal = journal
         self.alarm_path = alarm_path
+        self.values_path = values_path
         self.revision = 0
         self._changed = asyncio.Event()
         self.active_alarms: dict[str, Any] = {}
@@ -298,7 +385,11 @@ class State:
         self.last_downlink = ""
         self.last_command = ""
         self.last_session_end = ""
+        self.last_session_end_time: str | None = None
+        self.sessions_closed = 0
+        self.last_malformed = ""
         self.rejected_ip = ""
+        self._load_values()
 
     def mark_changed(self) -> None:
         self.revision += 1
@@ -311,6 +402,35 @@ class State:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._changed.wait(), timeout)
             await asyncio.sleep(BURST_SECONDS)
+
+    def _load_values(self) -> None:
+        """Readings survive a restart of the app with their real age, so the 8-minute rule still applies to them."""
+        if not self.values_path:
+            return
+        try:
+            with open(self.values_path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            now = time.time()
+            times = {k: t for k, t in data["times"].items()
+                     if k in data["values"] and 0 <= now - t < SETTINGS_READ_SECONDS}
+            self.values = {k: data["values"][k] for k in times}
+            self.value_times = times
+            self.last_update_unix = max(times.values(), default=None)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            pass
+
+    def save_values(self) -> None:
+        if not self.values_path:
+            return
+        with contextlib.suppress(OSError):
+            temporary = self.values_path + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump({"values": self.values, "times": self.value_times}, handle)
+            os.replace(temporary, self.values_path)
+
+    def is_fresh(self) -> bool:
+        t = self.last_update_unix
+        return bool(t and time.time() - t < DATA_FRESH_SECONDS)  # a reconnect of a few seconds is not an outage
 
     def _load_alarms(self) -> None:
         """Alarms survive a restart of the app: the boiler may not repeat them."""
@@ -401,8 +521,11 @@ class State:
             "last_command": self.last_command,
             "last_session_end": self.last_session_end,
             "rejected_ip": self.rejected_ip,
-            "data_fresh": bool(t and now - t < DATA_FRESH_SECONDS),  # a reconnect of a few seconds is not an outage
+            "last_session_end_time": self.last_session_end_time,
+            "sessions_closed": self.sessions_closed,
+            "data_fresh": self.is_fresh(),
             "malformed_frames": self.malformed_frames,
+            "last_malformed": self.last_malformed,
             "alarms": dict(self.active_alarms),
             "alarm_history": self.alarm_history[-20:],
             "values": self.values.copy(),
@@ -493,7 +616,7 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
         elif method == "GET" and (path == "/status" or path.startswith("/status?since=")):
             if "?since=" in path:
                 await gateway.state.wait_for_change(int(path.split("=", 1)[1]), gateway.config.get("long_poll_seconds", LONG_POLL_SECONDS))
-            status, data = HTTPStatus.OK, json.dumps(gateway.state.snapshot()).encode()
+            status, data = HTTPStatus.OK, json.dumps(gateway.status()).encode()
         elif method == "GET" and path == "/health":
             status, data = HTTPStatus.OK, b'{"status":"ok"}'
         elif method == "POST" and path == "/command":
@@ -529,14 +652,25 @@ class Gateway:
     def __init__(self, config: dict[str, Any], journal: Journal | None = None) -> None:
         self.config = config
         self.journal = journal or Journal(None)
-        self.state = State(self.journal, config.get("alarm_path"))
+        self.state = State(self.journal, config.get("alarm_path"), config.get("values_path"))
         self._current: Session | None = None
         self._command = None
+        self._pending_command: tuple[int, float] | None = None
         self._setting = None
         self._stop = asyncio.Event()
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def status(self) -> dict[str, Any]:
+        return {**self.state.snapshot(), "connection_mode": self.config["connection_mode"],
+                "read_interval_seconds": self.config["read_interval_seconds"],
+                "pending_command": self._pending_command[0] if self._pending_command else None}
+
+    def _note_session_end(self) -> None:
+        self.state.sessions_closed += 1
+        self.state.last_session_end_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.state.mark_changed()
 
     def setting(self, slot: Any, value: Any) -> bool:
         """PWR for one known slot, inside its limits, only in a synchronised local session."""
@@ -551,10 +685,19 @@ class Gateway:
         return True
 
     def command(self, value: Any) -> bool:
-        """CMD 0/1 towards the module. Only in a synchronised local session, so never next to the cloud."""
-        if type(value) is not int or value not in (0, 1) or self._command is None:
+        """CMD 0/1 towards the module, repeated until the module echoes it in B_CMD or the time runs out.
+
+        Never next to the cloud: in local mode a short reconnect does not refuse the command, it waits for the module;
+        in the fallback mode a synchronised session is required.
+        """
+        if type(value) is not int or value not in (0, 1):
             return False
-        self._command(value)
+        waiting_allowed = self.config["connection_mode"] == "local" and self.state.is_fresh()
+        if self._command is None and not waiting_allowed:
+            return False
+        self._pending_command = (value, time.monotonic() + COMMAND_GIVE_UP_SECONDS)
+        if self._command is not None:
+            self._command(value)
         return True
 
     def _event(self, event: str, **fields: Any) -> None:
@@ -652,11 +795,14 @@ class Gateway:
         self.state.upstream_connected = False
         self._command = None
         self._setting = None
+        if self.config["connection_mode"] != "local":
+            self._pending_command = None
+        next_command = 0.0
         pending_reads: list[int] = []
         next_settings: float | None = None
         last_probe = time.monotonic()
         self._event("local_session", retry_cloud=retry_cloud)
-        frames = MQTTFrames()
+        frames = ModuleFrames()
         key: bytes | None = None
         subscribed = False
         topic_server: str | None = None
@@ -665,7 +811,7 @@ class Gateway:
         next_refresh: float | None = None
         rstat_at: float | None = None
         next_counters = 0.0
-        poll_interval = self.config["poll_interval_seconds"]
+        poll_interval = self.config["read_interval_seconds"]
         pending = initial
 
         def publish(obj: dict[str, Any]) -> None:
@@ -684,7 +830,8 @@ class Gateway:
             self.state.last_status_request_unix = time.time()
 
         def send_command(value: int) -> None:
-            nonlocal next_refresh
+            nonlocal next_refresh, next_command
+            next_command = time.monotonic() + COMMAND_RETRY_SECONDS
             publish({"CMD": value})
             self.state.last_command = json.dumps({"CMD": value})
             self._event("command", value=value)
@@ -710,14 +857,17 @@ class Gateway:
                 self.state.last_session_end = "WiFi module closed"
                 return
             if chunk:
-                try:
-                    decoded = frames.feed(chunk)
-                except ValueError:
-                    # The module sometimes sends cut frames (seen in the capture and the proxy logs). The portal then
-                    # drops the connection; here they are skipped, because every message is checked by its signature.
-                    frames = MQTTFrames()
-                    decoded = []
-                    self.state.malformed_frames += 1
+                decoded = frames.feed(chunk)
+                if frames.runs:
+                    # The portal drops the connection on these; here they are skipped. Every message is still checked by
+                    # its signature. Only the length and the kind are kept: the bytes could hold a token.
+                    kind = "AT text" if b"AT+" in frames.skipped else "other"
+                    moment = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    self.state.malformed_frames += frames.runs
+                    self.state.last_malformed = f"{moment} {len(frames.skipped)} bytes, {kind}"
+                    self._event("skipped_bytes", count=len(frames.skipped), kind=kind)
+                    frames.runs = 0
+                    frames.skipped.clear()
                 for head, body in decoded:
                     kind = head >> 4
                     if kind == 1:
@@ -753,6 +903,8 @@ class Gateway:
                             continue
                         self.journal.message("up", valid=True, msg=redact(message))
                         self.state.ingest(message)
+                        if self._pending_command and str(message.get("B_CMD")) == str(self._pending_command[0]):
+                            self._pending_command = None
                         if "_sync" in message and subscribed and topic_server:
                             client_id = message.get("clMsgId")
                             token = message.get("_token")
@@ -763,6 +915,7 @@ class Gateway:
                                 self._setting = send_setting
                                 next_settings = time.monotonic() + RSTAT_DELAY + 2
                                 next_refresh = time.monotonic() + self.config["first_poll_delay_seconds"]
+                                next_command = next_refresh + 2  # the first answer may show it already arrived
                                 self._event("local_sync_ack")
                         elif sync_ok and topic_server:
                             for name, value in message.items():
@@ -771,6 +924,14 @@ class Gateway:
                 await writer.drain()
 
             now = time.monotonic()
+            if self._pending_command and sync_ok:
+                value, deadline = self._pending_command
+                if now >= deadline:
+                    self._pending_command = None
+                    self._event("command_gave_up", value=value)
+                elif now >= next_command:
+                    send_command(value)
+                    await writer.drain()
             if next_refresh is not None and now >= next_refresh:
                 request("REFRESH", 0)
                 if now >= next_counters:
@@ -833,11 +994,13 @@ class Gateway:
                 transport.abort()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(previous.done.wait(), 5)
+            self.state.last_session_end = "replaced by a new connection"
         if self._current is not session:
             writer.close()
             session.done.set()
             return
         self.state.module_connected = True
+        self.state.mark_changed()
         try:
             await self._serve(session, reader, writer)
         except (OSError, ValueError, asyncio.IncompleteReadError) as exc:
@@ -855,7 +1018,13 @@ class Gateway:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
             session.done.set()
+            self._note_session_end()
             self._event("session_closed", reason=self.state.last_session_end)
+
+    async def _save_values_regularly(self) -> None:
+        while True:
+            await asyncio.sleep(VALUES_SAVE_SECONDS)
+            self.state.save_values()
 
     async def run(self) -> None:
         server = await asyncio.start_server(self.handle_module, self.config["listen_host"], self.config["listen_port"])
@@ -869,8 +1038,11 @@ class Gateway:
         for sig in (signal.SIGTERM, signal.SIGINT):
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, self.request_stop)
+        saving = asyncio.create_task(self._save_values_regularly())
         await self._stop.wait()
         LOG.info("Stopping")
+        saving.cancel()
+        self.state.save_values()
         server.close()
         api.close()
         current = self._current
@@ -878,6 +1050,11 @@ class Gateway:
             current.writer.transport.abort()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(current.done.wait(), 2)
+
+
+def same_content(first: str, second: str) -> bool:
+    with open(first, "rb") as one, open(second, "rb") as other:
+        return one.read() == other.read()
 
 
 def install_integration(source: str = "/app/integration/centrometal_local",
@@ -891,7 +1068,7 @@ def install_integration(source: str = "/app/integration/centrometal_local",
             destination = os.path.join(target, os.path.relpath(folder, source))
             for name in names:
                 old, new = os.path.join(folder, name), os.path.join(destination, name)
-                if os.path.exists(new) and open(old, "rb").read() == open(new, "rb").read():
+                if os.path.exists(new) and same_content(old, new):
                     continue
                 os.makedirs(destination, exist_ok=True)
                 shutil.copyfile(old, new)
@@ -954,17 +1131,18 @@ def load_config(path: str) -> dict[str, Any]:
         "api_host": "0.0.0.0",
         "api_port": 8765,
         "connect_timeout": 5.0,
-        "poll_interval_seconds": int(cfg.get("poll_interval_seconds", 240)),
+        "read_interval_seconds": int(cfg.get("read_interval_seconds", READ_INTERVAL_SECONDS)),
         "first_poll_delay_seconds": 2.0,
         "cloud_retry_interval": 60.0,
         "debug_journal": bool(cfg.get("debug_journal", False)),
         "alarm_path": "/data/alarms.json",
+        "values_path": "/data/values.json",
     }
     if result["connection_mode"] not in MODES:
         raise ValueError("Invalid connection_mode")
     ipaddress.ip_address(result["module_ip"])
-    if not 10 <= result["poll_interval_seconds"] <= 3600:
-        raise ValueError("Invalid poll interval")
+    if not 10 <= result["read_interval_seconds"] <= 240:  # above 240 s readings would pass for stale between two reads
+        raise ValueError("Invalid read interval")
     if result["connection_mode"] != "local" and result["upstream_host"] in ("127.0.0.1", "localhost", result["listen_host"]):
         raise ValueError("Upstream must not point back to this gateway")
     return result

@@ -13,11 +13,13 @@ The module connects to `portal.centrometal.hr` on TCP 1883 using plain MQTT. You
 | Sent to the module | When |
 |---|---|
 | `_sync_ACK`, `PING_ACK`, `E*`/`W*` acknowledgements | as replies |
-| `REFRESH` (read request) | at `poll_interval_seconds`, default 240 s |
+| `REFRESH` (read request) | every `read_interval_seconds`, default 10 s |
 | `RSTAT` (counters) | every 60 s at most |
 | `CMD` 0 or 1 | only when you use the switch |
 | `PRD` (read a setting) | after connecting and every hour |
 | `PWR` (write a setting) | only when you change one |
+
+With the burner on, the module also sends the fast values by itself when they change (boiler, flue gas, return, lambda, stage). With the burner off it sends almost nothing unless asked, so the read interval sets how fresh the readings are. The cloud integration asks every 240 s, which is why it shows many values at that pace.
 
 Nothing else can be sent. Settings can be written only for the seven known slots, within the limits of the controller.
 
@@ -73,7 +75,7 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
    On a UniFi gateway: Settings → Policy Table → Create New Policy → NAT → Dest. NAT.
 
    The rule catches only new connections, so the module moves over the next time it reconnects. Restarting its WiFi connection speeds this up.
-5. **Check.** `Gateway state` shows `local`, and temperatures update within a few minutes.
+5. **Check.** `Gateway state` shows `local`, and temperatures update within seconds.
 
 **Working without internet:** the module looks up the portal's name each time it reconnects. If your DNS server cannot answer with the internet down, add a local DNS record for `portal.centrometal.hr` pointing to the same portal IP.
 
@@ -84,7 +86,7 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 | `module_ip` | Only this IP is accepted |
 | `connection_mode` | `local`, `cloud_proxy` or `cloud_proxy_fallback`, see above |
 | `upstream_host` | The portal's name, used only by the two proxy modes |
-| `poll_interval_seconds` | Time between read requests, default 240 |
+| `read_interval_seconds` | Time between read requests, 10 to 240, default 10. One answer is about 1.3 kB |
 | `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without password, token or signature. Normally only new parameter names and session events are written |
 
 ## Going back

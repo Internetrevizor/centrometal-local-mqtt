@@ -1,11 +1,11 @@
-"""PelTec on/off through the local server. Available only in local mode with a synchronised module."""
+"""PelTec on/off through the local server. Available in local mode while the readings are fresh."""
 import asyncio
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID
+from .parameters import K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID, commands_available
 from .sensor import device_info
 
 
@@ -38,8 +38,7 @@ class PelTecCommand(CoordinatorEntity, SwitchEntity):
 
     @property
     def available(self):
-        d = self.coordinator.data or {}
-        return self.coordinator.last_update_success and d.get("mode") == "local" and bool(d.get("data_fresh"))
+        return self.coordinator.last_update_success and commands_available(self.coordinator.data)
 
     @property
     def is_on(self):
@@ -76,8 +75,7 @@ class K1Circuit(CoordinatorEntity, SwitchEntity):
 
     @property
     def available(self):
-        d = self.coordinator.data or {}
-        return self.coordinator.last_update_success and d.get("mode") == "local" and bool(d.get("data_fresh"))
+        return self.coordinator.last_update_success and commands_available(self.coordinator.data)
 
     @property
     def is_on(self):
