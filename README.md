@@ -28,6 +28,7 @@ Every parameter the boiler sends becomes a sensor, with English names and the sa
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
 - `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
+- `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
 
 To keep the same entity_ids in `local` mode, remove the cloud integration before adding this one.
 
