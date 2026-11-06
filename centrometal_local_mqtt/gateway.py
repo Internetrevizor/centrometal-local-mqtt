@@ -8,7 +8,8 @@ connection_mode:
 In local mode the server sends protocol acknowledgements, the read requests REFRESH, RSTAT and PRD, and, when asked
 through the local API, CMD 0/1 and PWR for the settings listed in parameters.LIMITS, within their limits. Nothing else can
 be emitted. Never logs or stores the MQTT password, _token, _sign or the installation ID. With debug_journal on, the journal
-file also receives the AT commands the controller leaks, with their arguments, which can hold a WiFi password; only that file.
+file also receives the AT commands the controller leaks, with their arguments, and every skipped byte in clear, which can hold a
+WiFi password, a token or the MQTT password; only that file.
 
 This file holds the sockets and the API. The protocol is in protocol.py, one module connection in session.py, the commands
 in commands.py and what is remembered in store.py: none of those touch a socket.
