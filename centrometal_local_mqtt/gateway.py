@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -287,6 +288,7 @@ class State:
         self.last_downlink = ""
         self.last_command = ""
         self.last_session_end = ""
+        self.rejected_ip = ""
 
     def ingest(self, signed: dict[str, Any]) -> None:
         self.verified_messages += 1
@@ -340,6 +342,7 @@ class State:
             "last_downlink": self.last_downlink,
             "last_command": self.last_command,
             "last_session_end": self.last_session_end,
+            "rejected_ip": self.rejected_ip,
             "data_fresh": bool(t and now - t < DATA_FRESH_SECONDS),  # a reconnect of a few seconds is not an outage
             "malformed_frames": self.malformed_frames,
             "alarms": {k: v for k, v in self.values.items() if ALARM_RE.match(k)},
@@ -414,14 +417,21 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
                 raise ValueError("Request too long")
             method, path, _ = line.decode("ascii").split(" ", 2)
             length = 0
+            authorization = b""
             while (header := await reader.readline()) not in (b"\r\n", b"\n", b""):
                 if header.lower().startswith(b"content-length:"):
                     length = int(header.split(b":", 1)[1])
+                elif header.lower().startswith(b"authorization:"):
+                    authorization = header.split(b":", 1)[1].strip()
             if length > 64:
                 raise ValueError("Body too long")
             body = await reader.readexactly(length) if length else b""
         status, data = HTTPStatus.NOT_FOUND, b"{}"
-        if method == "GET" and path == "/status":
+        token = gateway.config.get("api_token")
+        allowed = not token or hmac.compare_digest(authorization, f"Bearer {token}".encode())
+        if path != "/health" and not allowed:
+            status = HTTPStatus.UNAUTHORIZED
+        elif method == "GET" and path == "/status":
             status, data = HTTPStatus.OK, json.dumps(gateway.state.snapshot()).encode()
         elif method == "GET" and path == "/health":
             status, data = HTTPStatus.OK, b'{"status":"ok"}'
@@ -740,7 +750,10 @@ class Gateway:
     async def handle_module(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         if (peer[0] if peer else "") != self.config["module_ip"]:
-            LOG.debug("Rejected connection from another IP")  # also the Supervisor watchdog
+            # The Supervisor watchdog also ends up here, from the internal network.
+            if peer and not peer[0].startswith("172.30."):
+                self.state.rejected_ip = peer[0]
+                LOG.warning("Rejected a connection from %s: not module_ip", peer[0])
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -827,6 +840,43 @@ def install_integration(source: str = "/app/integration/centrometal_local",
         return False
 
 
+def api_token(path: str = "/data/api_token") -> str:
+    """A random token, kept across restarts in the app's private storage."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            token = handle.read().strip()
+        if token:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(32)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(token)
+    return token
+
+
+def own_address() -> str:
+    """This container's address on the internal network; the target is not actually contacted."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("172.30.32.1", 80))
+        return sock.getsockname()[0]
+
+
+def write_connection_file(port: int, token: str, address: str,
+                          target: str = "/homeassistant/custom_components/centrometal_local/gateway.json") -> None:
+    """Tells the integration how to reach this app, so nothing has to be typed. Written again at every start."""
+    try:
+        if not os.path.isdir(os.path.dirname(target)):
+            return
+        temporary = target + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({"host": address, "port": port, "token": token}, handle)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+    except OSError as exc:
+        LOG.warning("Could not write the connection file: %s", type(exc).__name__)
+
+
 def load_config(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
@@ -837,7 +887,7 @@ def load_config(path: str) -> dict[str, Any]:
         "upstream_port": 1883,
         "listen_host": "0.0.0.0",
         "listen_port": 1883,
-        "api_host": "127.0.0.1",
+        "api_host": "0.0.0.0",
         "api_port": 8765,
         "connect_timeout": 5.0,
         "poll_interval_seconds": int(cfg.get("poll_interval_seconds", 240)),
@@ -861,7 +911,9 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load_config(args.config)
+    config["api_token"] = api_token()
     install_integration()
+    write_connection_file(config["api_port"], config["api_token"], own_address())
     asyncio.run(Gateway(config, Journal(JOURNAL_PATH, debug=config["debug_journal"])).run())
 
 

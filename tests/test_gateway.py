@@ -755,6 +755,55 @@ class InstallTests(unittest.TestCase):
             self.assertFalse(g.install_integration(str(source), str(Path(folder) / "nu" / "exista" / "x")))
 
 
+class ApiSecurityTests(Base):
+    async def call(self, gateway, raw):
+        server = await asyncio.start_server(lambda r, w: g.send_http_status(r, w, gateway), "127.0.0.1", 0)
+        self.servers.append(server)
+        reader, writer = await self.module(server.sockets[0].getsockname()[1])
+        writer.write(raw)
+        await writer.drain()
+        return await asyncio.wait_for(reader.read(), 3)
+
+    async def test_token_is_required_except_for_health(self):
+        gateway = g.Gateway(config(api_token="sigur"))
+        self.assertIn(b"401", await self.call(gateway, b"GET /status HTTP/1.1\r\n\r\n"))
+        self.assertIn(b"401", await self.call(gateway, b"GET /status HTTP/1.1\r\nAuthorization: Bearer gresit\r\n\r\n"))
+        self.assertIn(b"200 OK", await self.call(gateway, b"GET /status HTTP/1.1\r\nAuthorization: Bearer sigur\r\n\r\n"))
+        self.assertIn(b"200 OK", await self.call(gateway, b"GET /health HTTP/1.1\r\n\r\n"))
+
+    async def test_command_needs_the_token(self):
+        gateway, port = await self.start(api_token="sigur")
+        await self.handshake(port)
+        body = b'{"CMD":1}'
+        raw = b"POST /command HTTP/1.1\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+        self.assertIn(b"401", await self.call(gateway, raw))
+        self.assertEqual(gateway.state.last_command, "")
+
+    def test_token_is_kept_across_restarts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "token")
+            first = g.api_token(path)
+            self.assertGreater(len(first), 30)
+            self.assertEqual(g.api_token(path), first)
+
+    def test_connection_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "gateway.json")
+            g.write_connection_file(8765, "sigur", "172.30.33.5", target)
+            self.assertEqual(json.loads(Path(target).read_text()), {"host": "172.30.33.5", "port": 8765, "token": "sigur"})
+            g.write_connection_file(8765, "x", "1.1.1.1", os.path.join(folder, "nu", "exista.json"))
+
+    async def test_rejected_address_is_shown(self):
+        gateway, port = await self.start(module_ip="192.0.2.1")
+        reader, writer = await self.module(port)
+        writer.write(connect())
+        try:
+            await asyncio.wait_for(reader.read(1), 3)
+        except ConnectionError:
+            pass
+        self.assertEqual(gateway.state.snapshot()["rejected_ip"], "127.0.0.1")
+
+
 class JournalModeTests(Base):
     async def test_normal_mode_keeps_only_new_keys_and_events(self):
         with tempfile.TemporaryDirectory() as folder:

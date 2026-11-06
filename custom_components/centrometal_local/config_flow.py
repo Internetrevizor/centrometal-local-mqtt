@@ -12,7 +12,7 @@ class CentrometalLocalFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = str(user_input["host"]).strip()
             port = int(user_input["port"])
-            await self.async_set_unique_id(f"{host}:{port}")
+            await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title=f"PelTec local ({host})", data={"host": host, "port": port})
         return self.async_show_form(

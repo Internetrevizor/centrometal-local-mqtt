@@ -1,5 +1,5 @@
 name: Centrometal Local MQTT Protocol
-version: 1.0.2
+version: 1.1.0
 slug: centrometal_local_mqtt
 description: Runs your PelTec II Lambda without the Centrometal cloud, or next to it. A small local server for the boiler's WiFi module, for readings and on/off, even with no internet.
 url: https://github.com/Internetrevizor/centrometal-local-mqtt
@@ -10,7 +10,10 @@ arch:
   - aarch64
   - amd64
   - armv7
-host_network: true
+ports:
+  1883/tcp: 1883
+ports_description:
+  1883/tcp: MQTT for the boiler WiFi module
 map:
   - share:rw
   - homeassistant_config:rw
