@@ -64,7 +64,7 @@ To keep the same entity_ids in `local` mode, remove the cloud integration before
 - `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
 - Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
 
-Tested on one real boiler: `local` and `cloud_proxy`. The `cloud_proxy_fallback` mode of earlier versions was never tried on a boiler and has been removed; choose another mode before updating, or the app will not start.
+Tested on one real boiler: `local` and `cloud_proxy`.
 
 ## Requirements
 
