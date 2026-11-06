@@ -52,7 +52,7 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
         d = self.coordinator.data or {}
         attributes = {k: d.get(k) for k in ("module_connected", "upstream_connected", "data_fresh", "connection_mode",
                                             "read_interval_seconds", "invalid_messages", "rejected_values", "malformed_frames",
-                                            "last_malformed", "last_command", "pending_command", "commands",
+                                            "last_malformed", "at_commands", "last_command", "pending_command", "commands",
                                             "sessions_closed", "close_reasons", "last_session_end",
                                             "last_session_end_time", "identity_changes", "rejected_ip")}
         attributes["parameters"] = len(d.get("values") or {})

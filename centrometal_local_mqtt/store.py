@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from parameters import MAX_AGE_SECONDS, valid_raw
-from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, redact
+from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, at_commands, redact
 
 LOG = logging.getLogger("peltec-gateway")
 ALARM_HISTORY = 50
@@ -25,6 +25,7 @@ BURST_SECONDS = 0.3  # the module sends a dump in several messages: answer once,
 MAX_VALUES = 750  # settings tables can be large
 COUNTERS = ("sessions_closed", "malformed_frames", "invalid_messages", "rejected_values", "commands_expired", "identity_changes")
 MAX_CLOSE_REASONS = 20
+MAX_AT_COMMANDS = 20
 
 
 def atomic_write(path: str, text: str, mode: int | None = None) -> None:
@@ -145,6 +146,7 @@ class State:
         self.last_session_end_time: str | None = None
         self.sessions_closed = 0
         self.close_reasons: dict[str, int] = {}
+        self.at_commands: dict[str, int] = {}
         self.last_malformed = ""
         self.rejected_ip = ""
         self._load_values()
@@ -182,13 +184,16 @@ class State:
             reasons = data.get("close_reasons", {})
             if isinstance(reasons, dict):
                 self.close_reasons = {str(k): v for k, v in reasons.items() if type(v) is int}
+            commands = data.get("at_commands", {})
+            if isinstance(commands, dict):
+                self.at_commands = {str(k): v for k, v in commands.items() if type(v) is int}
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
             pass
 
     def values_payload(self) -> str:
         return json.dumps({"values": self.values, "times": self.value_times,
                            "counters": {name: getattr(self, name) for name in COUNTERS},
-                           "close_reasons": self.close_reasons})
+                           "close_reasons": self.close_reasons, "at_commands": self.at_commands})
 
     def write_values(self, payload: str) -> None:
         if self.values_path:
@@ -240,6 +245,19 @@ class State:
             LOG.warning("A module with a different identity connected from the allowed address")
             if self.journal:
                 self.journal.write("identity_changed")
+
+    def note_skipped(self, runs: int, skipped: bytes) -> tuple[str, dict[str, int]]:
+        """Bytes in the module's stream that are not a frame. Only the length, the kind and the AT names are kept."""
+        commands = at_commands(skipped)
+        kind = "AT text" if b"AT+" in skipped else "other"
+        moment = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        names = ", ".join(f"{name} x{count}" for name, count in commands.items())
+        self.malformed_frames += runs
+        self.last_malformed = f"{moment} {len(skipped)} bytes, {kind}" + (f": {names}" if names else "")
+        for name, count in commands.items():
+            if name in self.at_commands or len(self.at_commands) < MAX_AT_COMMANDS:
+                self.at_commands[name] = self.at_commands.get(name, 0) + count
+        return kind, commands
 
     def note_status_request(self) -> None:
         self.status_requests_sent += 1
@@ -329,6 +347,7 @@ class State:
             "data_fresh": self.is_fresh(),
             "malformed_frames": self.malformed_frames,
             "last_malformed": self.last_malformed,
+            "at_commands": dict(self.at_commands),
             "alarms": dict(self.active_alarms),
             "alarm_history": self.alarm_history[-20:],
         }

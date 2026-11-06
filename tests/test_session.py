@@ -315,6 +315,56 @@ class StreamTests(unittest.TestCase):
         self.assertIsNone(module.session.close_reason)
 
 
+class ATCommandTests(unittest.TestCase):
+    def test_only_the_names_are_kept(self):
+        text = b'AT+CWLIF\r\nAT+CWLIF\r\nAT\r\nAT+RST\r\nAT+CWJAP="my-network","my-password"\r\n+++AT+CW'
+        self.assertEqual(proto.at_commands(text), {"AT+CWLIF": 2, "AT": 1, "AT+RST": 1, "AT+CWJAP": 1, "+++": 1})
+
+    def test_ordinary_bytes_are_not_commands(self):
+        self.assertEqual(proto.at_commands(b"CAT\r\nDATA\r\nATOM\r\nat+rst\r\n\x00\xff"), {})
+
+    def test_nothing_but_the_names_reaches_the_state_or_the_journal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "j.jsonl")
+            state, seen = store.State(), []
+            session = s.LocalSession(state, c.CommandBook(), store.Journal(path, debug=True),
+                                     {"read_interval_seconds": 60, "first_poll_delay_seconds": 2.0}, 0.0,
+                                     lambda name, **fields: seen.append((name, fields)))
+            session.feed(connect() + subscribe(), 0.0)
+            session.take_output()
+            session.feed(b'AT+CWJAP="my-network","my-password"\r\n' + AT * 3 + up({"B_Tk1": 61, "clMsgId": 1}), 1.0)
+            self.assertEqual(state.at_commands, {"AT+CWJAP": 1, "AT+CWLIF": 3})
+            self.assertIn("AT text: AT+CWJAP x1, AT+CWLIF x3", state.last_malformed)
+            self.assertEqual(seen[-1][1]["commands"], {"AT+CWJAP": 1, "AT+CWLIF": 3})
+            self.assertEqual(state.values["B_Tk1"], 61)
+            for text in (json.dumps(state.meta()), json.dumps(seen), state.values_payload()):
+                self.assertNotIn("my-network", text)
+                self.assertNotIn("my-password", text)
+
+    def test_they_are_never_answered(self):
+        module = Module()
+        module.session.feed(AT * 40, module.now)
+        module.session.tick(module.now)
+        self.assertEqual(module.session.take_output(), b"")
+        self.assertEqual(module.state.at_commands, {"AT+CWLIF": 40})
+
+    def test_totals_survive_a_restart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "values.json")
+            state = store.State(values_path=path)
+            state.ingest({"B_Tk1": 60, "clMsgId": 1})
+            state.note_skipped(1, AT * 2)
+            state.save_values()
+            self.assertEqual(store.State(values_path=path).at_commands, {"AT+CWLIF": 2})
+
+    def test_the_proxy_copy_keeps_them_as_well(self):
+        state = store.State()
+        observer = g.MQTTObserver(state, store.Journal(None), g.Session(None), True)
+        observer.feed(connect())
+        observer.feed(AT * 2 + up({"B_Tk1": 50, "clMsgId": 0}))
+        self.assertEqual(state.at_commands, {"AT+CWLIF": 2})
+
+
 class ValueCheckTests(unittest.TestCase):
     def test_a_known_number_of_the_wrong_type_is_dropped_and_counted(self):
         state = store.State()

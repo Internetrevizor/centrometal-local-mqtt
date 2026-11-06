@@ -108,6 +108,7 @@ async def test_entities_keep_their_ids_and_follow_the_stream(hass, app):
     assert hass.states.get(SWITCH).state == "off"
     assert hass.states.get("switch.k1_heating_circuit_off_on").state == "on"
     assert hass.states.get("sensor.peltec_ii_lambda_gateway_state").state == "local"
+    assert hass.states.get("sensor.peltec_ii_lambda_gateway_state").attributes["at_commands"] == {}
     assert hass.states.get("sensor.peltec_ii_lambda_sessions_closed") is not None
     assert hass.states.get("button.peltec_ii_lambda_clear_alarms") is None
     assert hass.states.get("binary_sensor.centrometal_boiler_system_connection").state == "on"
@@ -201,6 +202,22 @@ async def test_discovery_with_the_same_details_does_not_reload(hass, socket_enab
     with patch("homeassistant.config_entries.ConfigEntries.async_schedule_reload") as reload:
         await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_HASSIO}, data=service_info())
     reload.assert_not_called()
+
+
+async def test_discovery_takes_the_address_out_of_an_old_title_without_a_reload(hass, socket_enabled):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="PelTec local (127.0.0.1)", data={"host": "dns-name", "port": 8765, "token": "tok"})
+    entry.add_to_hass(hass)
+    with patch("homeassistant.config_entries.ConfigEntries.async_schedule_reload") as reload:
+        await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_HASSIO}, data=service_info())
+    assert entry.title == "PelTec local"
+    reload.assert_not_called()
+
+
+async def test_discovery_keeps_a_title_the_user_chose(hass, socket_enabled):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Centrala", data={"host": "dns-name", "port": 8765, "token": "tok"})
+    entry.add_to_hass(hass)
+    await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_HASSIO}, data=service_info())
+    assert entry.title == "Centrala"
 
 
 async def test_discovery_on_a_fresh_install_asks_first(hass, socket_enabled):

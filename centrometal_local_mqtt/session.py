@@ -6,7 +6,6 @@ and only once per session; PING comes every 60 s; REFRESH is answered in about 0
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 from typing import Any, Callable
 
@@ -74,13 +73,10 @@ class LocalSession:
         for head, body in self.frames.feed(data):
             self._frame(head, body, now)
         if self.frames.runs:
-            # The portal drops the connection on these; here they are skipped. Every message is still checked by
-            # its signature. Only the length and the kind are kept: the bytes could hold a token.
-            kind = "AT text" if b"AT+" in self.frames.skipped else "other"
-            moment = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            self.state.malformed_frames += self.frames.runs
-            self.state.last_malformed = f"{moment} {len(self.frames.skipped)} bytes, {kind}"
-            self.event("skipped_bytes", count=len(self.frames.skipped), kind=kind)
+            # The portal drops the connection on these; here they are skipped and never answered. Every message is still
+            # checked by its signature. Only the length, the kind and the AT names are kept: the bytes could hold a token.
+            kind, commands = self.state.note_skipped(self.frames.runs, bytes(self.frames.skipped))
+            self.event("skipped_bytes", count=len(self.frames.skipped), kind=kind, commands=commands)
             self.frames.runs = 0
             self.frames.skipped.clear()
 

@@ -20,8 +20,12 @@ class CentrometalLocalFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered = {"host": config["host"], "port": config["port"], "token": config["token"]}
         for entry in self._async_current_entries():  # entries from before 1.2 have another unique id: look at all of them
             data = {**entry.data, **self._discovered}
-            if data != dict(entry.data) or entry.unique_id != DOMAIN:
-                self.hass.config_entries.async_update_entry(entry, data=data, unique_id=DOMAIN)
+            changed = data != dict(entry.data) or entry.unique_id != DOMAIN
+            # Older versions put the address in the title. A title the user chose stays.
+            title = "PelTec local" if entry.title.startswith("PelTec local (") else entry.title
+            if changed or title != entry.title:
+                self.hass.config_entries.async_update_entry(entry, data=data, unique_id=DOMAIN, title=title)
+            if changed:
                 self.hass.config_entries.async_schedule_reload(entry.entry_id)
             return self.async_abort(reason="already_configured")
         await self.async_set_unique_id(DOMAIN)

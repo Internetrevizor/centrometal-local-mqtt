@@ -30,7 +30,7 @@ With the burner on, the module also sends the fast values by itself when they ch
 
 Nothing else can be sent. Settings can be written only for the known slots, within the limits of the controller.
 
-The app watches its own session. A module that connects but never completes the handshake (30 s), or that stays silent for 3 minutes while its TCP connection looks alive, is disconnected, and it reconnects within seconds. Text the boiler's controller leaks into the stream (`AT+CWLIF`) is skipped and counted.
+The app watches its own session. A module that connects but never completes the handshake (30 s), or that stays silent for 3 minutes while its TCP connection looks alive, is disconnected, and it reconnects within seconds. Text the boiler's controller leaks into the stream (`AT+CWLIF`) is skipped, counted and never answered. `Gateway State` shows the names of those commands in `at_commands` and `last_malformed`, without their arguments.
 
 ## Commands
 
