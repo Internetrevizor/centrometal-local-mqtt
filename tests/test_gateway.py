@@ -863,6 +863,8 @@ def load_integration():
 
     Base = base()
     CoordinatorEntity = base()
+    issue_registry = {"async_create_issue": lambda *a, **k: None, "async_delete_issue": lambda *a, **k: None,
+                      "IssueSeverity": types.SimpleNamespace(WARNING="warning")}
     stubs = {
         "aiohttp": {"ClientError": ClientError, "ClientTimeout": lambda **kw: None},
         "homeassistant": {},
@@ -871,7 +873,6 @@ def load_integration():
         "homeassistant.core": {"HomeAssistant": object},
         "homeassistant.exceptions": {"HomeAssistantError": Exception},
         "homeassistant.components": {},
-        "homeassistant.components.button": {"ButtonEntity": Base},
         "homeassistant.components.diagnostics": {"async_redact_data": lambda data, keys: data},
         "homeassistant.components.binary_sensor": {"BinarySensorDeviceClass": types.SimpleNamespace(CONNECTIVITY="c", PROBLEM="p"),
                                                     "BinarySensorEntity": Base},
@@ -879,9 +880,10 @@ def load_integration():
         "homeassistant.components.switch": {"SwitchEntity": Base},
         "homeassistant.components.sensor": {"SensorDeviceClass": types.SimpleNamespace(TEMPERATURE="t"), "SensorEntity": Base,
                                             "SensorStateClass": types.SimpleNamespace(MEASUREMENT="m", TOTAL_INCREASING="i")},
-        "homeassistant.helpers": {},
+        "homeassistant.helpers": {"issue_registry": types.SimpleNamespace(**issue_registry)},
         "homeassistant.helpers.entity": {"EntityCategory": types.SimpleNamespace(DIAGNOSTIC="d", CONFIG="c")},
         "homeassistant.helpers.aiohttp_client": {"async_get_clientsession": None},
+        "homeassistant.helpers.issue_registry": issue_registry,
         "homeassistant.helpers.update_coordinator": {"DataUpdateCoordinator": Coordinator, "UpdateFailed": UpdateFailed,
                                                      "CoordinatorEntity": CoordinatorEntity},
     }
@@ -908,10 +910,6 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         coordinator.host, coordinator.port, coordinator.token = "h", 1, None
         coordinator._last_answer = None
         coordinator._values, coordinator._received, coordinator._reported_commands = {}, {}, None
-
-        async def reload():
-            pass
-        coordinator.async_load_connection = reload
         return coordinator
 
     def session_that_fails(self, package, error):
@@ -965,26 +963,9 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         coordinator._apply({"type": "delta", "commands": done})
         self.assertEqual(fired, [("centrometal_local_command_result", {"command": "power", "id": 2, "state": "expired", "value": 0})])
 
-    async def test_a_failure_moves_to_the_other_way_of_finding_the_app(self):
-        package, *_ = load_integration()
-        coordinator = package.GatewayCoordinator.__new__(package.GatewayCoordinator)
-        coordinator._discovered = {"host": "dns-name", "port": 8765, "token": "a"}
-        coordinator._attempt = 0
-        coordinator.connection_file = "x"
-
-        async def in_executor(function, *args):
-            return {"host": "172.30.33.5", "port": 8765, "token": "a"}
-        coordinator.hass = types.SimpleNamespace(async_add_executor_job=in_executor)
-        await package.GatewayCoordinator.async_load_connection(coordinator)
-        self.assertEqual((coordinator.connection_source, coordinator.host), ("discovery", "dns-name"))
-        await package.GatewayCoordinator.async_load_connection(coordinator)
-        self.assertEqual((coordinator.connection_source, coordinator.host), ("file", "172.30.33.5"))
-        await package.GatewayCoordinator.async_load_connection(coordinator)
-        self.assertEqual(coordinator.connection_source, "discovery")
-
     def test_all_platforms_import(self):
         load_integration()
-        for name in ("sensor", "binary_sensor", "switch", "number", "button", "diagnostics"):
+        for name in ("sensor", "binary_sensor", "switch", "number", "diagnostics"):
             importlib.import_module(f"centrometal_local.{name}")
 
 
@@ -1005,22 +986,21 @@ class StopTests(Base):
         self.assertFalse(gateway.state.module_connected)
 
 
-class InstallTests(unittest.TestCase):
-    def test_install_copies_once_and_keeps_going_without_config(self):
+class StopKeepsTheLastSessionTests(Base):
+    async def test_the_session_closed_by_a_stop_is_counted_after_the_restart(self):
         with tempfile.TemporaryDirectory() as folder:
-            source = Path(folder) / "src"
-            (source / "brand").mkdir(parents=True)
-            (source / "a.py").write_text("1")
-            (source / "brand" / "i.png").write_text("2")
-            config = Path(folder) / "config"
-            (config / "custom_components").mkdir(parents=True)
-            target = config / "custom_components" / "x"
-            self.assertTrue(g.install_integration(str(source), str(target)))
-            self.assertEqual((target / "brand" / "i.png").read_text(), "2")
-            self.assertFalse(g.install_integration(str(source), str(target)))
-            (source / "a.py").write_text("3")
-            self.assertTrue(g.install_integration(str(source), str(target)))
-            self.assertFalse(g.install_integration(str(source), str(Path(folder) / "nu" / "exista" / "x")))
+            path = os.path.join(folder, "values.json")
+            port = free_port()
+            gateway = g.Gateway(config(listen_port=port, api_port=free_port(), values_path=path))
+            task = asyncio.create_task(gateway.run())
+            await asyncio.sleep(.1)
+            reader, writer = await self.module(port)
+            writer.write(connect())
+            await writer.drain()
+            await next_frame(reader)
+            gateway.request_stop()
+            await asyncio.wait_for(task, 4)
+            self.assertEqual(g.State(values_path=path).sessions_closed, 1)
 
 
 class ApiSecurityTests(Base):
@@ -1053,13 +1033,6 @@ class ApiSecurityTests(Base):
             first = g.api_token(path)
             self.assertGreater(len(first), 30)
             self.assertEqual(g.api_token(path), first)
-
-    def test_connection_file(self):
-        with tempfile.TemporaryDirectory() as folder:
-            target = os.path.join(folder, "gateway.json")
-            g.write_connection_file(8765, "sigur", "172.30.33.5", target)
-            self.assertEqual(json.loads(Path(target).read_text()), {"host": "172.30.33.5", "port": 8765, "token": "sigur"})
-            g.write_connection_file(8765, "x", "1.1.1.1", os.path.join(folder, "nu", "exista.json"))
 
     async def test_rejected_address_is_shown(self):
         gateway, port = await self.start(module_ip="192.0.2.1")

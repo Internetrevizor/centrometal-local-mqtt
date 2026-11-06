@@ -34,7 +34,4 @@ profile centrometal_local_mqtt flags=(attach_disconnected,mediate_deleted) {
   /data/** rw,
   /share/centrometal_local_mqtt/ rw,
   /share/centrometal_local_mqtt/** rw,
-  /homeassistant/custom_components/ r,
-  /homeassistant/custom_components/centrometal_local/ rw,
-  /homeassistant/custom_components/centrometal_local/** rw,
 }

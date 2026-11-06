@@ -49,7 +49,7 @@ jobs:
       matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v6
-      - run: cp -r custom_components centrometal_local_mqtt/integration
+      - run: cp custom_components/centrometal_local/parameters.py centrometal_local_mqtt/
       - uses: home-assistant/builder/actions/build-image@2026.09.0
         with:
           arch: ${{ matrix.arch }}

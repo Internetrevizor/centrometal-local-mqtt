@@ -9,7 +9,6 @@ async def async_get_config_entry_diagnostics(hass, entry):
     data = coordinator.data or {}
     return async_redact_data({
         "entry": dict(entry.data),
-        "connection_source": coordinator.connection_source,
         "last_update_success": coordinator.last_update_success,
         "status": {key: value for key, value in data.items() if key not in ("values", "value_age_seconds")},
         "values": data.get("values", {}),

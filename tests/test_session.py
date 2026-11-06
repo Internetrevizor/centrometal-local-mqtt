@@ -342,19 +342,6 @@ class DeltaTests(unittest.TestCase):
         self.assertEqual(state.delta(state.revision)["values"], {})
 
 
-class AlarmClearTests(unittest.TestCase):
-    def test_cleared_by_a_person_stays_cleared_until_reported_again(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "alarms.json")
-            state = store.State(alarm_path=path)
-            state.ingest({"E8.1": "A", "W2": "B", "clMsgId": 1})
-            self.assertEqual(state.clear_alarms(), 2)
-            self.assertEqual(store.State(alarm_path=path).active_alarms, {})
-            self.assertEqual(state.alarm_history[-1]["value"], "cleared by user")
-            state.ingest({"E8.1": "A", "clMsgId": 2})
-            self.assertEqual(state.active_alarms, {"E8.1": "A"})
-
-
 class PersistenceTests(unittest.TestCase):
     def test_counters_survive_a_restart(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -405,6 +392,34 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(other.take_output(), proto.frame(0x20, b"\x00\x00"))
 
 
+class AlarmsAreReadOnlyTests(unittest.TestCase):
+    def test_no_way_to_end_an_alarm_from_here(self):
+        self.assertFalse(hasattr(store.State, "clear_alarms"))
+        self.assertNotIn(b'"/alarms', (ROOT / "centrometal_local_mqtt/gateway.py").read_bytes())
+        state = store.State()
+        state.ingest({"E8.1": "A", "clMsgId": 1})
+        for _ in range(100):
+            state.ingest({"B_Tk1": 60, "clMsgId": 2})
+        self.assertEqual(state.active_alarms, {"E8.1": "A"})
+        state.ingest({"E8.1": "P", "clMsgId": 3})
+        self.assertEqual(state.active_alarms, {})
+
+
+class NoAccessToHomeAssistantTests(unittest.TestCase):
+    def test_the_app_touches_nothing_of_home_assistant(self):
+        app = ROOT / "centrometal_local_mqtt"
+        self.assertNotIn(b"homeassistant_config", (app / "config.yaml").read_bytes())
+        self.assertNotIn(b"/homeassistant", (app / "apparmor.txt").read_bytes())
+        self.assertNotIn(b"/homeassistant", (app / "gateway.py").read_bytes())
+
+    def test_app_and_integration_and_hacs_agree(self):
+        manifest = json.loads((ROOT / "custom_components/centrometal_local/manifest.json").read_text())
+        config = (ROOT / "centrometal_local_mqtt/config.yaml").read_text()
+        self.assertIn(f"\nversion: {manifest['version']}\n", config)
+        self.assertEqual(g.Gateway({"connection_mode": "local", "read_interval_seconds": 60}).status()["api_version"], p.API_VERSION)
+        self.assertEqual(sorted(path.name for path in (ROOT / "custom_components").iterdir() if "__pycache__" not in path.name), ["centrometal_local"])
+
+
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     def config(self, **overrides):
         return {"module_ip": "127.0.0.1", "connection_mode": "local", "read_interval_seconds": 60,
@@ -431,7 +446,6 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         port = await self.serve(gateway)
         self.assertIn(b"200 OK", await self.call(port, b"GET /health HTTP/1.1\r\n\r\n"))
         self.assertIn(b"401", await self.call(port, b"GET /events HTTP/1.1\r\n\r\n"))
-        self.assertIn(b"401", await self.call(port, self.post(b"/alarms/clear", {})))
 
     async def test_the_answer_says_what_came_of_the_command(self):
         gateway = g.Gateway(self.config())
@@ -467,13 +481,6 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(status["pending_command"])
         self.assertEqual(status["commands"]["power"]["state"], "expired")
         self.assertEqual(status["commands_expired"], 1)
-
-    async def test_alarms_are_cleared_through_the_api(self):
-        gateway = g.Gateway(self.config())
-        gateway.state.ingest({"E8.1": "A", "clMsgId": 1})
-        raw = await self.call(await self.serve(gateway), self.post(b"/alarms/clear", {}))
-        self.assertEqual(json.loads(raw.split(b"\r\n\r\n", 1)[1]), {"cleared": 1})
-        self.assertEqual(gateway.status()["alarms"], {})
 
     async def test_events_give_everything_once_then_only_changes_and_a_heartbeat(self):
         gateway = g.Gateway(self.config(event_heartbeat_seconds=.2))

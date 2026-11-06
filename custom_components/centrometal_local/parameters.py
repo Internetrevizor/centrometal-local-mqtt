@@ -162,12 +162,12 @@ SETTINGS = {
 # The app takes it from this file as well: it refuses what is not here.
 LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
 MAX_AGE_SECONDS = 480
+API_VERSION = 1  # the app and the integration update separately: this goes up when one stops understanding the other
 COUNTER_SENSORS = {
     "sessions_closed": ("Sessions Closed", SENSOR_PREFIX + "sessions_closed"),
     "malformed_frames": ("Malformed Frames", SENSOR_PREFIX + "malformed_frames"),
     "commands_expired": ("Commands Expired", SENSOR_PREFIX + "commands_expired"),
 }
-CLEAR_ALARMS_ENTITY_ID = "button.peltec_ii_lambda_clear_alarms"
 NUMERIC_KINDS = ("temperature", "setpoint", "measure", "counter", "number", "map")
 
 

@@ -1,21 +1,20 @@
 {
   "config": {
     "step": {
-      "user": {
-        "title": "Centrometal Local MQTT Protocol",
-        "description": "Gateway diagnostic API address. No cloud credentials are required.",
-        "data": {
-          "host": "Gateway API host",
-          "port": "Gateway API port"
-        }
-      },
       "hassio_confirm": {
         "title": "Centrometal Local MQTT Protocol",
         "description": "Add the boiler served by the Centrometal Local MQTT Protocol app?"
       }
     },
     "abort": {
-      "already_configured": "This boiler is already configured."
+      "already_configured": "This boiler is already configured.",
+      "app_required": "This integration works together with the Centrometal Local MQTT Protocol app. Install and start the app from the app store: it announces itself, and the boiler appears here under Discovered. See the documentation of the repository."
+    }
+  },
+  "issues": {
+    "app_version_mismatch": {
+      "title": "Update the Centrometal Local MQTT Protocol app and integration",
+      "description": "The app and the integration update separately, and these two versions no longer understand each other. Update both to the latest version, then restart Home Assistant."
     }
   }
 }

@@ -104,13 +104,12 @@ async def add_entry(hass, app, token=TOKEN):
 async def test_entities_keep_their_ids_and_follow_the_stream(hass, app):
     entry = await add_entry(hass, app)
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.runtime_data.connection_source == "discovery"
     await until(lambda: hass.states.get(UPPER) is not None and hass.states.get(UPPER).state == "55.0")
     assert hass.states.get(SWITCH).state == "off"
     assert hass.states.get("switch.k1_heating_circuit_off_on").state == "on"
     assert hass.states.get("sensor.peltec_ii_lambda_gateway_state").state == "local"
     assert hass.states.get("sensor.peltec_ii_lambda_sessions_closed") is not None
-    assert hass.states.get("button.peltec_ii_lambda_clear_alarms") is not None
+    assert hass.states.get("button.peltec_ii_lambda_clear_alarms") is None
     assert hass.states.get("binary_sensor.centrometal_boiler_system_connection").state == "on"
     app.gateway.state.ingest({"B_Tak1_1": 56, "clMsgId": 5})
     await until(lambda: hass.states.get(UPPER).state == "56.0")
@@ -169,15 +168,6 @@ async def test_a_refused_command_raises(hass, app):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_clear_alarms_button(hass, app):
-    entry = await add_entry(hass, app)
-    app.gateway.state.ingest({"E8.1": "A", "clMsgId": 5})
-    await until(lambda: hass.states.get("binary_sensor.peltec_ii_lambda_alarm").state == "on")
-    await hass.services.async_call("button", "press", {"entity_id": "button.peltec_ii_lambda_clear_alarms"}, blocking=True)
-    await until(lambda: hass.states.get("binary_sensor.peltec_ii_lambda_alarm").state == "off")
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
 async def test_entities_stay_through_a_short_silence_of_the_app(hass, app):
     entry = await add_entry(hass, app)
     await until(lambda: hass.states.get(UPPER).state == "55.0")
@@ -220,6 +210,24 @@ async def test_discovery_on_a_fresh_install_asks_first(hass, socket_enabled):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] == "create_entry"
     assert result["data"] == {"host": "dns-name", "port": 8765, "token": "tok"}
+
+
+async def test_adding_by_hand_says_the_app_is_needed(hass, socket_enabled):
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert (result["type"], result["reason"]) == ("abort", "app_required")
+
+
+async def test_app_of_another_version_raises_an_issue_and_the_right_one_clears_it(hass, app):
+    from homeassistant.helpers import issue_registry as ir
+    entry = await add_entry(hass, app)
+    await until(lambda: entry.runtime_data.data)
+    registry = ir.async_get(hass)
+    assert registry.async_get_issue(DOMAIN, "app_version_mismatch") is None
+    entry.runtime_data._apply({"values": {}, "api_version": 999})
+    assert registry.async_get_issue(DOMAIN, "app_version_mismatch") is not None
+    entry.runtime_data._apply({"values": {}, "api_version": 1})
+    assert registry.async_get_issue(DOMAIN, "app_version_mismatch") is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_diagnostics_hide_the_token(hass, app):
