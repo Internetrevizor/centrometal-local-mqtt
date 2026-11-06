@@ -1,0 +1,6 @@
+Centrometal Local MQTT Protocol
+Community project, not affiliated with or endorsed by Centrometal.
+
+Stage descriptions, temperature bounds and parameter labels are adapted from
+Internetrevizor/hass-centrometal-boiler (Apache-2.0).
+The message signature was documented publicly by scr34m/centrometal-reverse-engineering.
