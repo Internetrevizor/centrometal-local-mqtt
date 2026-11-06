@@ -365,6 +365,73 @@ class ATCommandTests(unittest.TestCase):
         self.assertEqual(state.at_commands, {"AT+CWLIF": 2})
 
 
+class ATArgumentsTests(unittest.TestCase):
+    SECRET = b'AT+CWSAP="hotspot-name","hotspot-password",5,3\r\n'
+
+    def state(self, folder, debug):
+        path = os.path.join(folder, "j.jsonl")
+        return store.State(store.Journal(path, debug=debug)), path
+
+    def events(self, path):
+        if not os.path.exists(path):
+            return []
+        return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()]
+
+    def test_whole_commands_only(self):
+        text = self.SECRET + AT + b"AT\r\n" + b"\x00\xff{\"_token\":\"abc\"}\r\n" + b'AT+CUT="no end'
+        self.assertEqual(proto.at_lines(text), {self.SECRET[:-2].decode(): 1, "AT+CWLIF": 1, "AT": 1})
+
+    def test_arguments_reach_the_journal_file_with_debug_on(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, path = self.state(folder, True)
+            state.note_skipped(1, self.SECRET + AT)
+            found = [e for e in self.events(path) if e["e"] == "at_text"]
+            self.assertEqual(found[0]["lines"], {self.SECRET[:-2].decode(): 1, "AT+CWLIF": 1})
+
+    def test_arguments_stay_out_of_everything_else(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, _ = self.state(folder, True)
+            state.note_skipped(1, self.SECRET)
+            for text in (json.dumps(state.meta()), state.values_payload()):
+                self.assertNotIn("hotspot-password", text)
+            self.assertEqual(state.at_commands, {"AT+CWSAP": 1})
+
+    def test_no_arguments_anywhere_with_debug_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, path = self.state(folder, False)
+            state.note_skipped(1, self.SECRET)
+            self.assertEqual(self.events(path), [])
+            self.assertEqual(state.at_commands, {"AT+CWSAP": 1})
+
+    def test_a_command_cut_by_a_tcp_segment_is_still_whole(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, path = self.state(folder, True)
+            state.note_skipped(1, self.SECRET[:20])
+            state.note_skipped(0, self.SECRET[20:])
+            found = [e for e in self.events(path) if e["e"] == "at_text"]
+            self.assertEqual(found[0]["lines"], {self.SECRET[:-2].decode(): 1})
+
+    def test_a_run_that_continues_in_the_next_segment_is_reported(self):
+        module = Module()
+        module.session.feed(AT * 2 + b"AT+CW", module.now)
+        first = module.state.last_malformed
+        module.session.feed(b"LIF\r\n" + AT, module.now)
+        self.assertEqual(module.state.malformed_frames, 1)
+        self.assertEqual(module.session.frames.skipped, bytearray())
+        self.assertIn("AT+CWLIF x2", first)
+        self.assertIn("AT+CWLIF x1", module.state.last_malformed)
+
+    def test_nothing_is_sent_back_with_debug_on(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, _ = self.state(folder, True)
+            session = s.LocalSession(state, c.CommandBook(), state.journal,
+                                     {"read_interval_seconds": 60, "first_poll_delay_seconds": 2.0}, 0.0, lambda *a, **k: None)
+            session.feed(connect() + subscribe(), 0.0)
+            session.take_output()
+            session.feed(self.SECRET + AT, 1.0)
+            self.assertEqual(session.take_output(), b"")
+
+
 class ValueCheckTests(unittest.TestCase):
     def test_a_known_number_of_the_wrong_type_is_dropped_and_counted(self):
         state = store.State()
