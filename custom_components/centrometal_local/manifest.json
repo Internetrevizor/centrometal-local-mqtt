@@ -1,6 +1,9 @@
 {
   "domain": "centrometal_local",
   "name": "Centrometal Local MQTT Protocol",
+  "categories": [
+    "climate.thermostats_heating"
+  ],
   "codeowners": [
     "@Internetrevizor"
   ],
