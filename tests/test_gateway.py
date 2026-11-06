@@ -712,6 +712,23 @@ class MalformedTests(Base):
         self.assertTrue(state.snapshot()["data_fresh"])
 
 
+class StopTests(Base):
+    async def test_stop_request_ends_the_app_and_the_session(self):
+        port = free_port()
+        api_port = free_port()
+        gateway = g.Gateway(config(listen_port=port, api_port=api_port))
+        task = asyncio.create_task(gateway.run())
+        await asyncio.sleep(.1)
+        reader, writer = await self.module(port)
+        writer.write(connect())
+        await writer.drain()
+        await next_frame(reader)
+        gateway.request_stop()
+        await asyncio.wait_for(task, 4)
+        self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
+        self.assertFalse(gateway.state.module_connected)
+
+
 class JournalModeTests(Base):
     async def test_normal_mode_keeps_only_new_keys_and_events(self):
         with tempfile.TemporaryDirectory() as folder:
