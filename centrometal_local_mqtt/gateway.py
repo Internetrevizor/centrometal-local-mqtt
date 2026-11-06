@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -802,6 +803,30 @@ class Gateway:
                 await asyncio.wait_for(current.done.wait(), 2)
 
 
+def install_integration(source: str = "/app/integration/centrometal_local",
+                        target: str = "/homeassistant/custom_components/centrometal_local") -> bool:
+    """Puts the Home Assistant integration in place, so the app is the only thing to install. True when files changed."""
+    try:
+        if not os.path.isdir(source) or not os.path.isdir(os.path.dirname(os.path.dirname(target))):
+            return False
+        changed = False
+        for folder, _, names in os.walk(source):
+            destination = os.path.join(target, os.path.relpath(folder, source))
+            for name in names:
+                old, new = os.path.join(folder, name), os.path.join(destination, name)
+                if os.path.exists(new) and open(old, "rb").read() == open(new, "rb").read():
+                    continue
+                os.makedirs(destination, exist_ok=True)
+                shutil.copyfile(old, new)
+                changed = True
+        if changed:
+            LOG.warning("Integration installed or updated: restart Home Assistant, then add Centrometal Local MQTT Protocol")
+        return changed
+    except OSError as exc:
+        LOG.warning("Could not install the integration: %s", type(exc).__name__)
+        return False
+
+
 def load_config(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
@@ -836,6 +861,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load_config(args.config)
+    install_integration()
     asyncio.run(Gateway(config, Journal(JOURNAL_PATH, debug=config["debug_journal"])).run())
 
 
