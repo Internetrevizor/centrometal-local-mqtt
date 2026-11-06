@@ -158,8 +158,29 @@ SETTINGS = {
     292: ("DHW difference", 0.1, "dhw_difference_k1_circuit", 5),
     576: ("Boiler difference", 1, "boiler_difference", 5),
 }
-LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
+# The only list of writable slots, with the controller's own limits (min, max), read from the portal 06.11.2026.
+# The app takes it from this file as well: it refuses what is not here.
+LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
 MAX_AGE_SECONDS = 480
+COUNTER_SENSORS = {
+    "sessions_closed": ("Sessions Closed", SENSOR_PREFIX + "sessions_closed"),
+    "malformed_frames": ("Malformed Frames", SENSOR_PREFIX + "malformed_frames"),
+    "commands_expired": ("Commands Expired", SENSOR_PREFIX + "commands_expired"),
+}
+CLEAR_ALARMS_ENTITY_ID = "button.peltec_ii_lambda_clear_alarms"
+NUMERIC_KINDS = ("temperature", "setpoint", "measure", "counter", "number", "map")
+
+
+def setting_key(slot):
+    """The parameter in which the controller reports a setting."""
+    return "K1B_onOff" if slot == K1_SWITCH_SLOT else f"PVAL_{slot}_0"
+
+
+def valid_raw(key, value):
+    """False for a value of the wrong type for a known parameter. Unknown parameters pass: nothing the boiler sends is lost."""
+    if key in PARAMETERS and PARAMETERS[key][1] in NUMERIC_KINDS:
+        return number(value) is not None
+    return True
 
 
 def is_entity(key):
@@ -283,7 +304,7 @@ def enabled_by_default(key):
 def commands_available(status):
     """Commands wait for the module during a short reconnect in local mode, so a session gap does not take them away."""
     status = status or {}
-    return (status.get("connection_mode") == "local" or status.get("mode") == "local") and bool(status.get("data_fresh"))
+    return status.get("connection_mode") == "local" and bool(status.get("data_fresh"))
 
 
 def is_fresh(age):

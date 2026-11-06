@@ -16,6 +16,7 @@ import types
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "custom_components/centrometal_local"))
 sys.path.insert(0, str(ROOT / "centrometal_local_mqtt"))
 import gateway as g  # noqa: E402
 
@@ -100,7 +101,10 @@ class ProtocolTests(unittest.TestCase):
             path.write_text(json.dumps({"module_ip": "192.0.2.10"}))
             cfg = g.load_config(str(path))
             self.assertEqual(cfg["connection_mode"], "local")
-            self.assertEqual(cfg["read_interval_seconds"], 10)
+            self.assertEqual(cfg["read_interval_seconds"], 60)
+            path.write_text(json.dumps({"module_ip": "192.0.2.10", "connection_mode": "cloud_proxy_fallback"}))
+            with self.assertRaises(ValueError):
+                g.load_config(str(path))
             path.write_text(json.dumps({"connection_mode": "x"}))
             with self.assertRaises(ValueError):
                 g.load_config(str(path))
@@ -383,45 +387,6 @@ class ProxyTests(Base):
         writer.write(connect())
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
-
-
-
-
-    async def test_fallback_when_cloud_is_down_then_returns(self):
-        cloud_port = free_port()
-        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port,
-                                         cloud_retry_interval=.3)
-        reader, _ = await self.handshake(port)
-        self.assertEqual(gateway.state.mode, "local")
-        await self.cloud(port=cloud_port)
-        self.assertEqual(await asyncio.wait_for(reader.read(1), 4), b"")
-        reader2, writer2 = await self.module(port)
-        writer2.write(connect())
-        await writer2.drain()
-        self.assertEqual(await next_frame(reader2), (0x20, b"\x00\x00"))
-        self.assertEqual(gateway.state.mode, "proxy")
-
-
-    async def test_fallback_when_cloud_is_silent(self):
-        async def silent(reader, writer):
-            await asyncio.sleep(30)
-        _, cloud_port = await self.cloud(handler=silent)
-        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port)
-        await self.handshake(port)
-        self.assertEqual(gateway.state.mode, "local")
-
-
-    async def test_fallback_when_connack_refused(self):
-        async def refuse(reader, writer):
-            await reader.read(65536)
-            writer.write(g.frame(0x20, b"\x00\x05"))
-            await writer.drain()
-            await asyncio.sleep(30)
-        _, cloud_port = await self.cloud(handler=refuse)
-        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port)
-        await self.handshake(port)
-        self.assertEqual(gateway.state.mode, "local")
-
     async def test_dead_peer_detection_is_set_on_both_sockets(self):
         _, cloud_port = await self.cloud()
         gateway, port = await self.start(connection_mode="cloud_proxy", upstream_port=cloud_port)
@@ -524,7 +489,6 @@ class ParameterTests(unittest.TestCase):
         self.assertTrue(self.p.commands_available({"connection_mode": "local", "mode": "idle", "data_fresh": True}))
         self.assertFalse(self.p.commands_available({"connection_mode": "local", "mode": "idle", "data_fresh": False}))
         self.assertFalse(self.p.commands_available({"connection_mode": "cloud_proxy", "mode": "proxy", "data_fresh": True}))
-        self.assertTrue(self.p.commands_available({"connection_mode": "cloud_proxy_fallback", "mode": "local", "data_fresh": True}))
         self.assertFalse(self.p.commands_available(None))
 
     def test_display_values_match_the_cloud_integration(self):
@@ -833,23 +797,16 @@ class PendingCommandTests(Base):
         self.assertIsNone(gateway.status()["pending_command"])
 
     async def test_repeated_without_echo_then_given_up(self):
-        old = g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS
-        g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS = .2, 1.2
-        try:
-            gateway, port = await self.start()
-            reader, _ = await self.handshake(port)
-            self.assertTrue(gateway.command(1))
-            await self.wait_for_key(reader, "CMD", 1)
-            await self.wait_for_key(reader, "CMD", 1)
-            await asyncio.sleep(1.5)
-            self.assertIsNone(gateway.status()["pending_command"])
-        finally:
-            g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS = old
-
-    async def test_fallback_mode_needs_a_session(self):
-        gateway = g.Gateway(config(connection_mode="cloud_proxy_fallback"))
-        gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
-        self.assertFalse(gateway.command(1))
+        gateway, port = await self.start()
+        gateway.commands.power_retry_seconds, gateway.commands.give_up_seconds = .2, 1.2
+        reader, _ = await self.handshake(port)
+        self.assertTrue(gateway.command(1))
+        await self.wait_for_key(reader, "CMD", 1)
+        await self.wait_for_key(reader, "CMD", 1)
+        await asyncio.sleep(1.5)
+        status = gateway.status()
+        self.assertIsNone(status["pending_command"])
+        self.assertEqual(status["commands"]["power"]["state"], "expired")
 
     async def test_no_fresh_readings_no_command(self):
         gateway = g.Gateway(config())
@@ -914,6 +871,8 @@ def load_integration():
         "homeassistant.core": {"HomeAssistant": object},
         "homeassistant.exceptions": {"HomeAssistantError": Exception},
         "homeassistant.components": {},
+        "homeassistant.components.button": {"ButtonEntity": Base},
+        "homeassistant.components.diagnostics": {"async_redact_data": lambda data, keys: data},
         "homeassistant.components.binary_sensor": {"BinarySensorDeviceClass": types.SimpleNamespace(CONNECTIVITY="c", PROBLEM="p"),
                                                     "BinarySensorEntity": Base},
         "homeassistant.components.number": {"NumberEntity": Base, "NumberMode": types.SimpleNamespace(BOX="box")},
@@ -948,6 +907,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         coordinator.hass, coordinator.data = types.SimpleNamespace(), data
         coordinator.host, coordinator.port, coordinator.token = "h", 1, None
         coordinator._last_answer = None
+        coordinator._values, coordinator._received, coordinator._reported_commands = {}, {}, None
 
         async def reload():
             pass
@@ -976,9 +936,55 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UpdateFailed):
             await self.coordinator(package, None)._async_update_data()
 
+    def stream_coordinator(self, package):
+        coordinator = self.coordinator(package, None)
+        fired = []
+        coordinator.hass = types.SimpleNamespace(bus=types.SimpleNamespace(async_fire=lambda name, data: fired.append((name, data))))
+        return coordinator, fired
+
+    def test_a_delta_adds_to_the_snapshot_and_refreshes_the_age(self):
+        package, *_ = load_integration()
+        coordinator, _ = self.stream_coordinator(package)
+        data = coordinator._apply({"values": {"B_Tk1": 60, "B_Tak1_1": 55}, "value_age_seconds": {"B_Tk1": 100, "B_Tak1_1": 100}})
+        self.assertGreaterEqual(data["value_age_seconds"]["B_Tk1"], 100)
+        data = coordinator._apply({"type": "delta", "values": {"B_Tk1": 61}, "seen": ["B_Tak1_1"], "mode": "local"})
+        self.assertEqual(data["values"], {"B_Tk1": 61, "B_Tak1_1": 55})
+        self.assertLess(data["value_age_seconds"]["B_Tak1_1"], 5)
+        self.assertEqual(data["mode"], "local")
+
+    def test_a_finished_command_becomes_one_event_and_old_ones_none(self):
+        package, *_ = load_integration()
+        coordinator, fired = self.stream_coordinator(package)
+        old = {"power": {"id": 1, "state": "confirmed", "value": 1}}
+        coordinator._apply({"values": {}, "commands": old})
+        self.assertEqual(fired, [])
+        coordinator._apply({"type": "delta", "commands": {"power": {"id": 2, "state": "pending", "value": 0}}})
+        self.assertEqual(fired, [])
+        done = {"power": {"id": 2, "state": "expired", "value": 0}}
+        coordinator._apply({"type": "delta", "commands": done})
+        coordinator._apply({"type": "delta", "commands": done})
+        self.assertEqual(fired, [("centrometal_local_command_result", {"command": "power", "id": 2, "state": "expired", "value": 0})])
+
+    async def test_a_failure_moves_to_the_other_way_of_finding_the_app(self):
+        package, *_ = load_integration()
+        coordinator = package.GatewayCoordinator.__new__(package.GatewayCoordinator)
+        coordinator._discovered = {"host": "dns-name", "port": 8765, "token": "a"}
+        coordinator._attempt = 0
+        coordinator.connection_file = "x"
+
+        async def in_executor(function, *args):
+            return {"host": "172.30.33.5", "port": 8765, "token": "a"}
+        coordinator.hass = types.SimpleNamespace(async_add_executor_job=in_executor)
+        await package.GatewayCoordinator.async_load_connection(coordinator)
+        self.assertEqual((coordinator.connection_source, coordinator.host), ("discovery", "dns-name"))
+        await package.GatewayCoordinator.async_load_connection(coordinator)
+        self.assertEqual((coordinator.connection_source, coordinator.host), ("file", "172.30.33.5"))
+        await package.GatewayCoordinator.async_load_connection(coordinator)
+        self.assertEqual(coordinator.connection_source, "discovery")
+
     def test_all_platforms_import(self):
         load_integration()
-        for name in ("sensor", "binary_sensor", "switch", "number"):
+        for name in ("sensor", "binary_sensor", "switch", "number", "button", "diagnostics"):
             importlib.import_module(f"centrometal_local.{name}")
 
 
@@ -1000,14 +1006,6 @@ class StopTests(Base):
 
 
 class InstallTests(unittest.TestCase):
-    def test_bundled_integration_matches_the_source(self):
-        source = ROOT / "custom_components/centrometal_local"
-        bundled = ROOT / "centrometal_local_mqtt/integration/centrometal_local"
-        names = sorted(p.relative_to(source).as_posix() for p in source.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
-        self.assertEqual(names, sorted(p.relative_to(bundled).as_posix() for p in bundled.rglob("*") if p.is_file() and "__pycache__" not in p.parts))
-        for name in names:
-            self.assertEqual((source / name).read_bytes(), (bundled / name).read_bytes(), name)
-
     def test_install_copies_once_and_keeps_going_without_config(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "src"

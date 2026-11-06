@@ -1,24 +1,27 @@
 """PelTec on/off through the local server. Available in local mode while the readings are fresh."""
-import asyncio
+import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID, commands_available
+from .parameters import K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID, commands_available, number
 from .sensor import device_info
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def _deliver(coordinator, send, what):
-    """The module reconnects within seconds when its link drops, so a refused command is tried again before failing."""
-    for attempt in range(4):
-        if await send():
-            await asyncio.sleep(1)  # the echo from the module arrives in about 0.3 s
-            await coordinator.async_request_refresh()
-            return
-        if attempt < 3:
-            await asyncio.sleep(5)
-    raise HomeAssistantError(f"The local server refused the {what}")
+    """Waits for what came of the request. The app keeps trying through a reconnect, so running out of patience here is not
+    a failure: the switch shows the real state, and the result arrives later as an event."""
+    answer = await send()
+    if answer is None:
+        raise HomeAssistantError(f"The local server did not answer the {what}")
+    state = answer.get("state")
+    if not answer.get("accepted") or state == "expired":
+        raise HomeAssistantError(f"The local server could not deliver the {what}: {state}")
+    if state not in ("confirmed", "unchanged"):
+        LOGGER.warning("The %s is not confirmed yet: %s", what, state)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -43,6 +46,7 @@ class PelTecCommand(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self):
         value = (self.coordinator.data or {}).get("values", {}).get("B_CMD")
+        value = number(value)
         return None if value is None else value == 1
 
     @property
@@ -80,6 +84,7 @@ class K1Circuit(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self):
         value = (self.coordinator.data or {}).get("values", {}).get("K1B_onOff")
+        value = number(value)
         return None if value is None else value == 1
 
     @property

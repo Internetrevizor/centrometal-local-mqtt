@@ -1,210 +1,58 @@
 """Centrometal Local MQTT Protocol: local server for the WiFi module of a PelTec II Lambda. Python standard library only.
 
 connection_mode:
-  local                 the module talks only to this server; the cloud is never contacted.
-  cloud_proxy           bypass: transparent TCP proxy to the portal, which keeps working; local readings are a copy.
-                        Sends nothing of its own to the module. Portal down = session closed, as with no proxy at all.
-  cloud_proxy_fallback  the same while the portal answers; this server takes over when it does not, and hands back
-                        when the portal returns.
+  local        the module talks only to this server; the cloud is never contacted.
+  cloud_proxy  bypass: transparent TCP proxy to the portal, which keeps working; local readings are a copy.
+               Sends nothing of its own to the module. Portal down = session closed, as with no proxy at all.
 
 In local mode the server sends protocol acknowledgements, the read requests REFRESH, RSTAT and PRD, and, when asked
-through the local API, CMD 0/1 and PWR for the settings listed in SETTINGS, within their limits. Nothing else can be emitted.
-Never logs or stores the MQTT password, _token, _sign or the installation ID.
+through the local API, CMD 0/1 and PWR for the settings listed in parameters.LIMITS, within their limits. Nothing else can
+be emitted. Never logs or stores the MQTT password, _token, _sign or the installation ID.
+
+This file holds the sockets and the API. The protocol is in protocol.py, one module connection in session.py, the commands
+in commands.py and what is remembered in store.py: none of those touch a socket.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import contextlib
-from datetime import datetime, timezone
-import hashlib
 import hmac
 import ipaddress
 import json
 import logging
 import os
-import re
 import secrets
 import shutil
 import signal
 import socket
-import struct
 import time
+import urllib.request
 from http import HTTPStatus
 from typing import Any
 
+from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
+from parameters import LIMITS, setting_key
+from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
+    MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
+    varint, verify_payload,
+)
+from session import LocalSession
+from store import Journal, State, atomic_write
+
 LOG = logging.getLogger("peltec-gateway")
-SEED = b"158208e84665e0158208e84665e065e0158208e8"  # public protocol constant
-MAX_PACKET = 1_048_576
-MAX_BUFFER = MAX_PACKET + 5
-FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_ /.]{0,79}$")  # real key: B_PTV/GRI; manual codes: E8.1, W2.1
-COMMAND_RE = re.compile(r"^(CMD|PWR|SCCMD)\b")  # PRD only reads a settings table
-ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")  # controller manual, chapter 6: errors, warnings, information
-ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # scr34m acknowledges errors and warnings
-LOCAL_REQUESTS = {"REFRESH", "RSTAT"}
-MODES = ("local", "cloud_proxy", "cloud_proxy_fallback")
+MODES = ("local", "cloud_proxy")
+SETTINGS = LIMITS
 JOURNAL_PATH = "/share/centrometal_local_mqtt/journal.jsonl"
-DATA_FRESH_SECONDS = 480
-SETTINGS_READ_SECONDS = 3600
-ALARM_HISTORY = 50
-COUNTERS_READ_SECONDS = 60  # counters move slowly: RSTAT does not follow a short poll interval
+DISCOVERY_SERVICE = "centrometal_local"
 LONG_POLL_SECONDS = 25
-BURST_SECONDS = 0.3  # the module sends a dump in several messages: answer once, not once per message
-# Writable slots of a PelTec II Lambda, with the controller's own limits (min, max), read from the portal 06.11.2026.
-SETTINGS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 272: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
-MAX_MODULE_FRAME = 4096  # the largest real message is about 300 bytes
-COMMAND_RETRY_SECONDS = 5
-COMMAND_GIVE_UP_SECONDS = 90  # a dead link takes 60 s to notice, then the module reconnects within seconds
+EVENT_HEARTBEAT_SECONDS = 30
 VALUES_SAVE_SECONDS = 300
-READ_INTERVAL_SECONDS = 10
-JOURNAL_MAX_BYTES = 10_000_000
-JOURNAL_KEEP = 3
-RSTAT_DELAY = 1.0  # same spacing as the integration: REFRESH, 1 s, RSTAT
+READ_INTERVAL_SECONDS = 60
 CONNECT_READ_TIMEOUT = 30
-
-
-def signing_key(password: bytes) -> bytes:
-    """Matches scr34m's JSON signing key derivation for passwords <= 40 bytes."""
-    if not password or len(password) > len(SEED):
-        raise ValueError("Unsupported MQTT password length")
-    return password + SEED[len(password):]
-
-
-def canonical(obj: dict[str, Any]) -> bytes:
-    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def sign_obj(obj: dict[str, Any], key: bytes) -> bytes:
-    if "_sign" in obj:
-        raise ValueError("_sign already set")
-    raw = canonical(obj)
-    data = dict(obj)
-    data["_sign"] = hmac.new(key, raw, hashlib.sha1).hexdigest()
-    return canonical(data)
-
-
-def verify_payload(payload: bytes, key: bytes) -> dict[str, Any] | None:
-    """HMAC covers exact serialized JSON before terminal `_sign` field."""
-    try:
-        data = json.loads(payload)
-        if not isinstance(data, dict) or not isinstance(data.get("_sign"), str):
-            return None
-        cut = payload.rfind(b',"_sign"')
-        if cut < 1 or not payload.endswith(b"}"):
-            return None
-        unsigned = payload[:cut] + b"}"
-        digest = hmac.new(key, unsigned, hashlib.sha1).hexdigest()
-        if not hmac.compare_digest(digest, data["_sign"]):
-            return None
-        return data
-    except (ValueError, UnicodeError, TypeError):
-        return None
-
-
-def varint(number: int) -> bytes:
-    if not 0 <= number <= 268435455:
-        raise ValueError("MQTT remaining length outside protocol range")
-    out = bytearray()
-    while True:
-        digit = number % 128
-        number //= 128
-        out.append(digit | (128 if number else 0))
-        if not number:
-            return bytes(out)
-
-
-def frame(header: int, payload: bytes = b"") -> bytes:
-    return bytes([header]) + varint(len(payload)) + payload
-
-
-def extract_frame(buffer: bytearray) -> tuple[int, bytes] | None:
-    if len(buffer) < 2:
-        return None
-    length, shift = 0, 0
-    for idx in range(1, min(len(buffer), 5)):
-        digit = buffer[idx]
-        length |= (digit & 127) << shift
-        if not digit & 128:
-            if length > MAX_PACKET:
-                raise ValueError("MQTT packet too large")
-            end = idx + 1 + length
-            if end > len(buffer):
-                return None
-            head, body = buffer[0], bytes(buffer[idx + 1:end])
-            del buffer[:end]
-            return head, body
-        shift += 7
-    if len(buffer) >= 5:
-        raise ValueError("Malformed MQTT remaining length")
-    return None
-
-
-def unpack_utf8(buf: bytes, offset: int) -> tuple[bytes, int]:
-    if offset + 2 > len(buf):
-        raise ValueError("Truncated MQTT string")
-    n = struct.unpack_from("!H", buf, offset)[0]
-    end = offset + 2 + n
-    if end > len(buf):
-        raise ValueError("Truncated MQTT string bytes")
-    return buf[offset + 2:end], end
-
-
-def read_connect_password(body: bytes) -> bytes:
-    protocol, ptr = unpack_utf8(body, 0)
-    if protocol != b"MQTT" or len(body) < ptr + 4 or body[ptr] != 4:
-        raise ValueError("Only MQTT 3.1.1 supported")
-    flags = body[ptr + 1]
-    if flags & 1:
-        raise ValueError("Invalid MQTT flags")
-    ptr += 4  # version, flags, keepalive
-    _, ptr = unpack_utf8(body, ptr)  # client identifier
-    if flags & 4:
-        _, ptr = unpack_utf8(body, ptr)  # will topic
-        _, ptr = unpack_utf8(body, ptr)  # will payload
-    if flags & 128:
-        _, ptr = unpack_utf8(body, ptr)  # username
-    if not flags & 64:
-        raise ValueError("MQTT password required")
-    password, ptr = unpack_utf8(body, ptr)
-    if ptr != len(body):
-        raise ValueError("Unexpected trailing MQTT connect data")
-    return password
-
-
-def get_publish(head: int, body: bytes) -> tuple[str, bytes]:
-    topic, off = unpack_utf8(body, 0)
-    qos = (head >> 1) & 3
-    if qos == 3:
-        raise ValueError("Invalid PUBLISH QoS")
-    if qos:
-        if off + 2 > len(body):
-            raise ValueError("Truncated publish packet ID")
-        off += 2
-    return topic.decode("utf-8"), body[off:]
-
-
-def subscribe_packet(body: bytes) -> tuple[int, list[str]]:
-    if len(body) < 2:
-        raise ValueError("Truncated SUBSCRIBE")
-    packet_id = struct.unpack_from("!H", body, 0)[0]
-    ptr = 2
-    topics = []
-    while ptr < len(body):
-        name, ptr = unpack_utf8(body, ptr)
-        if ptr >= len(body):
-            raise ValueError("Truncated SUBSCRIBE QoS")
-        ptr += 1
-        topics.append(name.decode("utf-8"))
-    if not topics:
-        raise ValueError("Empty SUBSCRIBE")
-    return packet_id, topics
-
-
-def pub_frame(topic: str, payload: bytes) -> bytes:
-    tb = topic.encode("utf-8")
-    if len(tb) > 65535:
-        raise ValueError("MQTT topic too long")
-    return frame(0x30, len(tb).to_bytes(2, "big") + tb + payload)
+MAX_CONNECT_BYTES = 65536
+SESSION_TICK_SECONDS = 0.5
+MAX_COMMAND_WAIT_SECONDS = 20
 
 
 def tune_socket(writer: asyncio.StreamWriter) -> None:
@@ -219,318 +67,6 @@ def tune_socket(writer: asyncio.StreamWriter) -> None:
         if option is not None:
             with contextlib.suppress(OSError):
                 sock.setsockopt(socket.IPPROTO_TCP, option, value)
-
-
-def module_frame_end(buf: bytearray) -> int | None:
-    """End of the MQTT frame at the start of buf; None when more bytes are needed; -1 when this is not a frame."""
-    head = buf[0]
-    kind = head >> 4
-    if not (head in (0x10, 0x40, 0x82, 0xC0, 0xE0) or (kind == 3 and (head >> 1) & 3 != 3)):
-        return -1
-    length, shift = 0, 0
-    for idx in range(1, 4):
-        if idx >= len(buf):
-            return None
-        length |= (buf[idx] & 127) << shift
-        shift += 7
-        if not buf[idx] & 128:
-            break
-    else:
-        return -1
-    if length > MAX_MODULE_FRAME:
-        return -1
-    if (head in (0xC0, 0xE0) and length != 0) or (head == 0x40 and length != 2) or (head == 0x82 and length < 5):
-        return -1
-    start, end = idx + 1, idx + 1 + length
-    body = bytes(buf[start:end])
-    if head == 0x10 and not body.startswith(b"\x00\x04MQTT"[:len(body)]):
-        return -1
-    if kind == 3:
-        if length < 5:
-            return -1
-        if len(body) >= 2:
-            size = int.from_bytes(body[:2], "big")
-            if size < 3 or 2 + size > length or not body[2:5].startswith(b"cm."[:len(body[2:5])]):
-                return -1
-    if end > len(buf):
-        return None
-    try:
-        if kind == 3:
-            payload = get_publish(head, body)[1]
-            if not payload.startswith(b"{") or not payload.endswith(b"}") or b"cm.inst." in payload:
-                return -1  # cut: the declared length ran over into what came next
-        elif head == 0x82:
-            subscribe_packet(body)
-    except ValueError:
-        return -1
-    return end
-
-
-def redact(message: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in message.items() if k not in ("_sign", "_token")}
-
-
-class MQTTFrames:
-    def __init__(self) -> None:
-        self.buf = bytearray()
-
-    def feed(self, data: bytes) -> list[tuple[int, bytes]]:
-        self.buf.extend(data)
-        if len(self.buf) > MAX_BUFFER:
-            raise ValueError("MQTT buffer limit exceeded")
-        result = []
-        while (item := extract_frame(self.buf)) is not None:
-            result.append(item)
-        return result
-
-
-class ModuleFrames(MQTTFrames):
-    """The stream from the module, which is not always clean MQTT.
-
-    The boiler's controller drives its WiFi chip with AT commands, and these sometimes land in the TCP stream: the capture
-    ends with a frame followed by AT+CWLIF repeated, right before the portal resets the connection. Read as MQTT that text
-    is a frame of random length that swallows real messages. Here only what looks like a real frame is accepted, and
-    everything else is skipped byte by byte, so the stream finds its way back at the next message.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.skipped = bytearray()
-        self.runs = 0
-        self._in_run = False
-
-    def feed(self, data: bytes) -> list[tuple[int, bytes]]:
-        self.buf.extend(data)
-        result = []
-        while self.buf:
-            end = module_frame_end(self.buf)
-            if end is None:
-                break
-            if end < 0:
-                if not self._in_run:
-                    self._in_run = True
-                    self.runs += 1
-                if len(self.skipped) < 4096:
-                    self.skipped.append(self.buf[0])
-                del self.buf[0]
-                continue
-            self._in_run = False
-            result.append(extract_frame(self.buf))
-        return result
-
-
-class Journal:
-    """Rotating JSON lines, redacted. A failure here must never touch the MQTT traffic."""
-
-    def __init__(self, path: str | None, max_bytes: int = JOURNAL_MAX_BYTES, keep: int = JOURNAL_KEEP,
-                 debug: bool = False) -> None:
-        self.path = path
-        self.debug = debug
-        self.max_bytes = max_bytes
-        self.keep = keep
-        self._warned = False
-
-    def message(self, event: str, **fields: Any) -> None:
-        """Every MQTT message: only with debug_journal, to spare the disk in normal operation."""
-        if self.debug:
-            self.write(event, **fields)
-
-    def write(self, event: str, **fields: Any) -> None:
-        if not self.path:
-            return
-        line = {"t": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "e": event, **fields}
-        try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(line, ensure_ascii=False) + "\n")
-            if os.path.getsize(self.path) > self.max_bytes:
-                for index in range(self.keep - 1, 0, -1):
-                    older = f"{self.path}.{index}"
-                    if os.path.exists(older):
-                        os.replace(older, f"{self.path}.{index + 1}")
-                os.replace(self.path, f"{self.path}.1")
-                with contextlib.suppress(OSError):
-                    os.remove(f"{self.path}.{self.keep}")
-        except OSError as exc:
-            if not self._warned:
-                self._warned = True
-                LOG.warning("Journal unavailable: %s", type(exc).__name__)
-
-
-class State:
-    def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None,
-                 values_path: str | None = None) -> None:
-        self.journal = journal
-        self.alarm_path = alarm_path
-        self.values_path = values_path
-        self.revision = 0
-        self._changed = asyncio.Event()
-        self.active_alarms: dict[str, Any] = {}
-        self.alarm_history: list[dict[str, Any]] = []
-        self._load_alarms()
-        self.seen_keys: set[str] = set()
-        self.mode = "idle"
-        self.module_connected = False
-        self.upstream_connected = False
-        self.values: dict[str, Any] = {}
-        self.value_times: dict[str, float] = {}
-        self.last_update_unix: float | None = None
-        self.verified_messages = 0
-        self.invalid_messages = 0
-        self.malformed_frames = 0
-        self.status_requests_sent = 0
-        self.last_status_request_unix: float | None = None
-        self.downlink_messages = 0
-        self.downlink_keys: set[str] = set()
-        self.last_downlink = ""
-        self.last_command = ""
-        self.last_session_end = ""
-        self.last_session_end_time: str | None = None
-        self.sessions_closed = 0
-        self.last_malformed = ""
-        self.rejected_ip = ""
-        self._load_values()
-
-    def mark_changed(self) -> None:
-        self.revision += 1
-        self._changed.set()
-        self._changed = asyncio.Event()
-
-    async def wait_for_change(self, since: int, timeout: float) -> None:
-        """Returns as soon as there is something newer than `since`, or after the timeout."""
-        if since == self.revision:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), timeout)
-            await asyncio.sleep(BURST_SECONDS)
-
-    def _load_values(self) -> None:
-        """Readings survive a restart of the app with their real age, so the 8-minute rule still applies to them."""
-        if not self.values_path:
-            return
-        try:
-            with open(self.values_path, encoding="utf-8") as handle:
-                data = json.load(handle)
-            now = time.time()
-            times = {k: t for k, t in data["times"].items()
-                     if k in data["values"] and 0 <= now - t < SETTINGS_READ_SECONDS}
-            self.values = {k: data["values"][k] for k in times}
-            self.value_times = times
-            self.last_update_unix = max(times.values(), default=None)
-        except (OSError, ValueError, TypeError, AttributeError, KeyError):
-            pass
-
-    def save_values(self) -> None:
-        if not self.values_path:
-            return
-        with contextlib.suppress(OSError):
-            temporary = self.values_path + ".tmp"
-            with open(temporary, "w", encoding="utf-8") as handle:
-                json.dump({"values": self.values, "times": self.value_times}, handle)
-            os.replace(temporary, self.values_path)
-
-    def is_fresh(self) -> bool:
-        t = self.last_update_unix
-        return bool(t and time.time() - t < DATA_FRESH_SECONDS)  # a reconnect of a few seconds is not an outage
-
-    def _load_alarms(self) -> None:
-        """Alarms survive a restart of the app: the boiler may not repeat them."""
-        if not self.alarm_path:
-            return
-        try:
-            with open(self.alarm_path, encoding="utf-8") as handle:
-                data = json.load(handle)
-            self.active_alarms = dict(data.get("active", {}))
-            self.alarm_history = list(data.get("history", []))[-ALARM_HISTORY:]
-        except (OSError, ValueError, TypeError, AttributeError):
-            pass
-
-    def _note_alarm(self, code: str, value: Any) -> None:
-        """A value starting with P means the alarm has passed (scr34m); not yet seen on a PelTec II."""
-        cleared = str(value).startswith("P")
-        known = self.active_alarms.get(code)
-        if (cleared and code not in self.active_alarms) or (not cleared and known == value):
-            return
-        if cleared:
-            self.active_alarms.pop(code, None)
-        elif not code.startswith("I"):
-            self.active_alarms[code] = value
-        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-        self.alarm_history = self.alarm_history[-ALARM_HISTORY:]
-        if self.alarm_path:
-            with contextlib.suppress(OSError):
-                temporary = self.alarm_path + ".tmp"
-                with open(temporary, "w", encoding="utf-8") as handle:
-                    json.dump({"active": self.active_alarms, "history": self.alarm_history}, handle)
-                os.replace(temporary, self.alarm_path)
-
-    def ingest(self, signed: dict[str, Any]) -> None:
-        self.verified_messages += 1
-        for code, value in signed.items():
-            if ALARM_RE.match(code):
-                self._note_alarm(code, value)
-        telemetry = {
-            k: v for k, v in signed.items()
-            if FIELD_RE.fullmatch(k) and not k.endswith("_ACK")
-            and k not in ("clMsgId", "srvMsgId", "PING")
-            and isinstance(v, (str, int, float, bool))
-            and (not isinstance(v, str) or len(v) <= 160)
-        }
-        if telemetry:
-            now = time.time()
-            for key in telemetry.keys() - self.seen_keys:
-                self.seen_keys.add(key)
-                if self.journal:
-                    self.journal.write("new_key", key=key, value=telemetry[key])
-            self.values.update(telemetry)
-            self.value_times.update(dict.fromkeys(telemetry, now))
-            if len(self.values) > 750:  # settings tables can be large
-                for key in sorted(self.value_times, key=self.value_times.get)[:len(self.values) - 750]:
-                    self.values.pop(key, None)
-                    self.value_times.pop(key, None)
-            self.last_update_unix = now
-            self.mark_changed()
-
-    def note_downlink(self, message: dict[str, Any]) -> None:
-        clean = redact(message)
-        text = json.dumps(clean, ensure_ascii=False)[:240]
-        self.downlink_messages += 1
-        self.last_downlink = text
-        if len(self.downlink_keys) < 40:
-            self.downlink_keys.update(k for k in clean if k != "srvMsgId")
-        if any(COMMAND_RE.match(k) for k in clean):
-            self.last_command = text
-
-    def snapshot(self) -> dict[str, Any]:
-        t = self.last_update_unix
-        now = time.time()
-        stamp = lambda v: datetime.fromtimestamp(v, timezone.utc).isoformat() if v else None  # noqa: E731
-        return {
-            "revision": self.revision,
-            "mode": self.mode,
-            "module_connected": self.module_connected,
-            "upstream_connected": self.upstream_connected,
-            "last_update": stamp(t),
-            "age_seconds": round(now - t, 1) if t else None,
-            "verified_messages": self.verified_messages,
-            "invalid_messages": self.invalid_messages,
-            "status_requests_sent": self.status_requests_sent,
-            "last_status_request": stamp(self.last_status_request_unix),
-            "downlink_messages": self.downlink_messages,
-            "downlink_keys": sorted(self.downlink_keys),
-            "last_downlink": self.last_downlink,
-            "last_command": self.last_command,
-            "last_session_end": self.last_session_end,
-            "rejected_ip": self.rejected_ip,
-            "last_session_end_time": self.last_session_end_time,
-            "sessions_closed": self.sessions_closed,
-            "data_fresh": self.is_fresh(),
-            "malformed_frames": self.malformed_frames,
-            "last_malformed": self.last_malformed,
-            "alarms": dict(self.active_alarms),
-            "alarm_history": self.alarm_history[-20:],
-            "values": self.values.copy(),
-            "value_age_seconds": {k: round(now - v, 1) for k, v in self.value_times.items()},
-        }
 
 
 class Session:
@@ -548,7 +84,10 @@ class MQTTObserver:
         self.journal = journal
         self.session = session
         self.module_to_cloud = module_to_cloud
-        self.frames = MQTTFrames()
+        self.frames = self._new_frames()
+
+    def _new_frames(self) -> MQTTFrames:
+        return ModuleFrames() if self.module_to_cloud else MQTTFrames()  # only the module mixes AT text into its stream
 
     def feed(self, chunk: bytes) -> None:
         try:
@@ -558,8 +97,12 @@ class MQTTObserver:
                     self.session.key = signing_key(read_connect_password(body))
                 elif kind == 3:
                     self._publish(header, body)
+            if isinstance(self.frames, ModuleFrames) and self.frames.runs:
+                self.state.malformed_frames += self.frames.runs
+                self.frames.runs = 0
+                self.frames.skipped.clear()
         except Exception as exc:  # pylint: disable=broad-except
-            self.frames = MQTTFrames()
+            self.frames = self._new_frames()
             LOG.warning("Cannot decode a monitoring frame, forwarding unaffected: %s", type(exc).__name__)
 
     def _publish(self, header: int, body: bytes) -> None:
@@ -591,6 +134,30 @@ class CloudUnavailable(Exception):
     pass
 
 
+def _answer(status: HTTPStatus, data: bytes) -> bytes:
+    return (f"HTTP/1.1 {status.value} {status.phrase}\r\n"
+            "Content-Type: application/json\r\nCache-Control: no-store\r\n"
+            f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data
+
+
+def _sse(event: dict[str, Any]) -> bytes:
+    return b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+
+
+async def stream_events(writer: asyncio.StreamWriter, gateway: "Gateway") -> None:
+    """All the readings once, then only what changes, with a heartbeat that says the app is alive."""
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n")
+    sent = gateway.state.revision
+    writer.write(_sse({**gateway.status(), "type": "snapshot"}))
+    await asyncio.wait_for(writer.drain(), 10)
+    while not writer.is_closing():
+        await gateway.state.wait_for_change(sent, gateway.config.get("event_heartbeat_seconds", EVENT_HEARTBEAT_SECONDS))
+        event = gateway.status_delta(sent)
+        sent = event["revision"]
+        writer.write(_sse(event))
+        await asyncio.wait_for(writer.drain(), 10)
+
+
 async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: "Gateway") -> None:
     try:
         async with asyncio.timeout(3):
@@ -613,6 +180,9 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
         allowed = not token or hmac.compare_digest(authorization, f"Bearer {token}".encode())
         if path != "/health" and not allowed:
             status = HTTPStatus.UNAUTHORIZED
+        elif method == "GET" and path == "/events":
+            await stream_events(writer, gateway)
+            return
         elif method == "GET" and (path == "/status" or path.startswith("/status?since=")):
             if "?since=" in path:
                 await gateway.state.wait_for_change(int(path.split("=", 1)[1]), gateway.config.get("long_poll_seconds", LONG_POLL_SECONDS))
@@ -620,18 +190,14 @@ async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamW
         elif method == "GET" and path == "/health":
             status, data = HTTPStatus.OK, b'{"status":"ok"}'
         elif method == "POST" and path == "/command":
-            value = json.loads(body).get("CMD") if body else None
-            accepted = gateway.command(value)
-            status = HTTPStatus.OK if accepted else HTTPStatus.CONFLICT
-            data = json.dumps({"accepted": accepted}).encode()
+            request = json.loads(body) if body else {}
+            status, data = await gateway.api_result(gateway.request_command(request.get("CMD")), request.get("wait"))
         elif method == "POST" and path == "/setting":
             request = json.loads(body) if body else {}
-            accepted = gateway.setting(request.get("slot"), request.get("value"))
-            status = HTTPStatus.OK if accepted else HTTPStatus.CONFLICT
-            data = json.dumps({"accepted": accepted}).encode()
-        writer.write((f"HTTP/1.1 {status.value} {status.phrase}\r\n"
-                      "Content-Type: application/json\r\nCache-Control: no-store\r\n"
-                      f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode() + data)
+            status, data = await gateway.api_result(gateway.request_setting(request.get("slot"), request.get("value")), request.get("wait"))
+        elif method == "POST" and path == "/alarms/clear":
+            status, data = HTTPStatus.OK, json.dumps({"cleared": gateway.state.clear_alarms()}).encode()
+        writer.write(_answer(status, data))
         await writer.drain()
     except (ValueError, UnicodeError, OSError, AttributeError, asyncio.IncompleteReadError):
         pass
@@ -652,53 +218,90 @@ class Gateway:
     def __init__(self, config: dict[str, Any], journal: Journal | None = None) -> None:
         self.config = config
         self.journal = journal or Journal(None)
-        self.state = State(self.journal, config.get("alarm_path"), config.get("values_path"))
+        self.state = State(self.journal, config.get("alarm_path"), config.get("values_path"), config.get("identity_path"))
+        self.commands = CommandBook(self._command_finished)
         self._current: Session | None = None
-        self._command = None
-        self._pending_command: tuple[int, float] | None = None
-        self._setting = None
+        self._local: LocalSession | None = None
         self._stop = asyncio.Event()
 
     def request_stop(self) -> None:
         self._stop.set()
 
     def status(self) -> dict[str, Any]:
-        return {**self.state.snapshot(), "connection_mode": self.config["connection_mode"],
-                "read_interval_seconds": self.config["read_interval_seconds"],
-                "pending_command": self._pending_command[0] if self._pending_command else None}
+        commands = self._command_status()  # first: a command that expires now belongs in the counters below
+        return {**self.state.snapshot(), **commands}
 
-    def _note_session_end(self) -> None:
-        self.state.sessions_closed += 1
-        self.state.last_session_end_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    def status_delta(self, since: int) -> dict[str, Any]:
+        commands = self._command_status()
+        return {**self.state.delta(since), **commands, "type": "delta"}
+
+    def _command_status(self) -> dict[str, Any]:
+        self.commands.expire(time.monotonic())
+        return {"connection_mode": self.config["connection_mode"],
+                "read_interval_seconds": self.config["read_interval_seconds"],
+                "pending_command": self.commands.pending_power(),
+                "commands": self.commands.summary()}
+
+    def _command_finished(self, command: Command) -> None:
+        if command.state == EXPIRED:
+            self.state.commands_expired += 1
+        self._event("command_result", command=command.key, value=command.value, state=command.state, attempts=command.attempts)
         self.state.mark_changed()
 
-    def setting(self, slot: Any, value: Any) -> bool:
-        """PWR for one known slot, inside its limits, only in a synchronised local session."""
-        if type(slot) is not int or slot not in SETTINGS or self._setting is None:
+    def _may_accept(self) -> bool:
+        """Never next to the cloud. In local mode a short reconnect does not refuse a command, it waits for the module."""
+        if self.config["connection_mode"] != "local":
             return False
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False
-        low, high = SETTINGS[slot]
-        if not low <= value <= high:
-            return False
-        self._setting(slot, int(value) if float(value).is_integer() else round(float(value), 1))
-        return True
+        return (self._local is not None and self._local.synced) or self.state.is_fresh()
+
+    def _kick(self) -> None:
+        """A new command goes out now, not at the next tick of the session."""
+        if self._local is not None and self._current is not None:
+            self._local.tick(time.monotonic())
+            data = self._local.take_output()
+            if data:
+                self._current.writer.write(data)
+
+    def request_command(self, value: Any) -> Command | None:
+        """CMD 0/1 towards the module, repeated until the module echoes it in B_CMD or the time runs out."""
+        if type(value) is not int or value not in (0, 1) or not self._may_accept():
+            return None
+        command = self.commands.power(value, time.monotonic())
+        self._kick()
+        return command
+
+    def request_setting(self, slot: Any, value: Any) -> Command | None:
+        """PWR for one known slot, inside its limits."""
+        if type(slot) is not int or slot not in LIMITS or isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        low, high = LIMITS[slot]
+        if not low <= value <= high or not self._may_accept():
+            return None
+        value = int(value) if float(value).is_integer() else round(float(value), 1)
+        key = setting_key(slot)
+        read_at = self.state.value_times.get(key)
+        age = time.time() - read_at if read_at else None
+        command = self.commands.setting(slot, value, self.state.values.get(key), age, time.monotonic())
+        self._kick()
+        return command
 
     def command(self, value: Any) -> bool:
-        """CMD 0/1 towards the module, repeated until the module echoes it in B_CMD or the time runs out.
+        return self.request_command(value) is not None
 
-        Never next to the cloud: in local mode a short reconnect does not refuse the command, it waits for the module;
-        in the fallback mode a synchronised session is required.
-        """
-        if type(value) is not int or value not in (0, 1):
-            return False
-        waiting_allowed = self.config["connection_mode"] == "local" and self.state.is_fresh()
-        if self._command is None and not waiting_allowed:
-            return False
-        self._pending_command = (value, time.monotonic() + COMMAND_GIVE_UP_SECONDS)
-        if self._command is not None:
-            self._command(value)
-        return True
+    def setting(self, slot: Any, value: Any) -> bool:
+        command = self.request_setting(slot, value)
+        return command is not None and command.state != RATE_LIMITED
+
+    async def api_result(self, command: Command | None, wait: Any) -> tuple[HTTPStatus, bytes]:
+        """200 once the request is taken. With `wait`, the answer also tells what came of it in that time."""
+        if command is None:
+            return HTTPStatus.CONFLICT, json.dumps({"accepted": False, "state": "refused"}).encode()
+        if isinstance(wait, (int, float)) and not isinstance(wait, bool) and wait > 0 and command.state not in FINISHED:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(command.finished.wait(), min(wait, MAX_COMMAND_WAIT_SECONDS))
+        accepted = command.state != RATE_LIMITED
+        return (HTTPStatus.OK if accepted else HTTPStatus.CONFLICT,
+                json.dumps({"accepted": accepted, "id": command.ident, "state": command.state}).encode())
 
     def _event(self, event: str, **fields: Any) -> None:
         LOG.info("%s %s", event, fields or "")
@@ -713,7 +316,9 @@ class Gateway:
                 if not chunk:
                     raise ConnectionResetError("WiFi module closed before CONNECT")
                 data.extend(chunk)
-                frames = MQTTFrames().feed(bytes(data))
+                if len(data) > MAX_CONNECT_BYTES:
+                    raise ValueError("No CONNECT from the WiFi module")
+                frames = ModuleFrames().feed(bytes(data))
                 if frames:
                     if frames[0][0] >> 4 != 1:
                         raise ValueError("First MQTT frame is not CONNECT")
@@ -776,189 +381,38 @@ class Gateway:
             with contextlib.suppress(Exception):
                 await cloud_writer.wait_closed()
 
-    async def _cloud_reachable(self) -> bool:
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.config["upstream_host"], self.config["upstream_port"]),
-                self.config["connect_timeout"])
-        except (OSError, asyncio.TimeoutError):
-            return False
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
-        return True
-
-    async def local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                    initial: bytes = b"", retry_cloud: bool = False) -> None:
-        """Minimal broker for one allowlisted WiFi module: protocol acknowledgements and REFRESH/RSTAT only."""
+    async def local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """The sockets of one local session. What to say and when is decided in LocalSession."""
         self.state.mode = "local"
         self.state.upstream_connected = False
-        self._command = None
-        self._setting = None
-        if self.config["connection_mode"] != "local":
-            self._pending_command = None
-        next_command = 0.0
-        pending_reads: list[int] = []
-        next_settings: float | None = None
-        last_probe = time.monotonic()
-        self._event("local_session", retry_cloud=retry_cloud)
-        frames = ModuleFrames()
-        key: bytes | None = None
-        subscribed = False
-        topic_server: str | None = None
-        srv_msg_id = 1
-        sync_ok = False
-        next_refresh: float | None = None
-        rstat_at: float | None = None
-        next_counters = 0.0
-        poll_interval = self.config["read_interval_seconds"]
-        pending = initial
-
-        def publish(obj: dict[str, Any]) -> None:
-            nonlocal srv_msg_id
-            assert key is not None and topic_server is not None
-            srv_msg_id += 1
-            message = {**obj, "srvMsgId": srv_msg_id}
-            writer.write(pub_frame(topic_server, sign_obj(message, key)))
-            self.journal.message("local_down", msg=redact(message))
-
-        def request(name: str, value: Any) -> None:
-            if name not in LOCAL_REQUESTS:
-                raise ValueError("Only read requests are allowed")
-            publish({name: value})
-            self.state.status_requests_sent += 1
-            self.state.last_status_request_unix = time.time()
-
-        def send_command(value: int) -> None:
-            nonlocal next_refresh, next_command
-            next_command = time.monotonic() + COMMAND_RETRY_SECONDS
-            publish({"CMD": value})
-            self.state.last_command = json.dumps({"CMD": value})
-            self._event("command", value=value)
-            next_refresh = time.monotonic()  # as the portal does: the answer shows the new state at once
-
-        def send_setting(slot: int, value: float) -> None:
-            publish({f"PWR {slot}": value})
-            self._event("setting", slot=slot, value=value)
-            pending_reads.append(slot)  # read it back, so what is shown is what the controller holds
-
+        self._event("local_session")
+        session = LocalSession(self.state, self.commands, self.journal, self.config, time.monotonic(), self._event)
+        self._local = session
         while True:
-            if pending:
-                chunk, pending = pending, b""
-            else:
-                try:
-                    chunk = await asyncio.wait_for(reader.read(65536), 0.5)
-                except asyncio.TimeoutError:
-                    # Since Python 3.11 a socket ETIMEDOUT is the same exception as the wait above.
-                    if reader.exception() is not None:
-                        raise reader.exception() from None
-                    chunk = None
+            try:
+                chunk = await asyncio.wait_for(reader.read(65536), SESSION_TICK_SECONDS)
+            except asyncio.TimeoutError:
+                # Since Python 3.11 a socket ETIMEDOUT is the same exception as the wait above.
+                if reader.exception() is not None:
+                    raise reader.exception() from None
+                chunk = None
             if chunk == b"":
                 self.state.last_session_end = "WiFi module closed"
                 return
-            if chunk:
-                decoded = frames.feed(chunk)
-                if frames.runs:
-                    # The portal drops the connection on these; here they are skipped. Every message is still checked by
-                    # its signature. Only the length and the kind are kept: the bytes could hold a token.
-                    kind = "AT text" if b"AT+" in frames.skipped else "other"
-                    moment = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                    self.state.malformed_frames += frames.runs
-                    self.state.last_malformed = f"{moment} {len(frames.skipped)} bytes, {kind}"
-                    self._event("skipped_bytes", count=len(frames.skipped), kind=kind)
-                    frames.runs = 0
-                    frames.skipped.clear()
-                for head, body in decoded:
-                    kind = head >> 4
-                    if kind == 1:
-                        if key is not None:
-                            raise ValueError("Duplicate MQTT CONNECT")
-                        key = signing_key(read_connect_password(body))
-                        writer.write(frame(0x20, b"\x00\x00"))
-                    elif kind == 8 and key is not None:
-                        packet_id, topics = subscribe_packet(body)
-                        sub = next((t for t in topics if t.startswith("cm.srv.peltec2.")), None)
-                        if sub:
-                            # Captured: the WiFi module subscribes with dots, the broker publishes with slashes.
-                            topic_server = "cm/srv/peltec2/" + sub.rsplit(".", 1)[-1]
-                            subscribed = True
-                        writer.write(frame(0x90, packet_id.to_bytes(2, "big") + bytes(
-                            0 if t.startswith("cm.srv.peltec2.") else 0x80 for t in topics)))
-                    elif kind == 12 and key is not None:
-                        writer.write(frame(0xD0))
-                    elif kind == 14:
-                        self.state.last_session_end = "MQTT DISCONNECT"
-                        return
-                    elif kind == 3 and key is not None:
-                        topic, payload = get_publish(head, body)
-                        if (head >> 1) & 3 == 1:
-                            _, off = unpack_utf8(body, 0)
-                            writer.write(frame(0x40, body[off:off + 2]))
-                        if not topic.startswith("cm.inst.peltec2."):
-                            continue
-                        message = verify_payload(payload, key)
-                        if message is None:
-                            self.state.invalid_messages += 1
-                            self.journal.message("up", valid=False, length=len(payload))
-                            continue
-                        self.journal.message("up", valid=True, msg=redact(message))
-                        self.state.ingest(message)
-                        if self._pending_command and str(message.get("B_CMD")) == str(self._pending_command[0]):
-                            self._pending_command = None
-                        if "_sync" in message and subscribed and topic_server:
-                            client_id = message.get("clMsgId")
-                            token = message.get("_token")
-                            if type(client_id) is int and isinstance(token, str) and len(token) <= 80:
-                                publish({"_sync_ACK": "ok", "clMsgId": client_id + 1, "_token": token})
-                                sync_ok = True
-                                self._command = send_command
-                                self._setting = send_setting
-                                next_settings = time.monotonic() + RSTAT_DELAY + 2
-                                next_refresh = time.monotonic() + self.config["first_poll_delay_seconds"]
-                                next_command = next_refresh + 2  # the first answer may show it already arrived
-                                self._event("local_sync_ack")
-                        elif sync_ok and topic_server:
-                            for name, value in message.items():
-                                if name == "PING" or ACK_RE.match(name):
-                                    publish({f"{name}_ACK": value})
-                await writer.drain()
-
             now = time.monotonic()
-            if self._pending_command and sync_ok:
-                value, deadline = self._pending_command
-                if now >= deadline:
-                    self._pending_command = None
-                    self._event("command_gave_up", value=value)
-                elif now >= next_command:
-                    send_command(value)
-                    await writer.drain()
-            if next_refresh is not None and now >= next_refresh:
-                request("REFRESH", 0)
-                if now >= next_counters:
-                    rstat_at = now + RSTAT_DELAY
-                    next_counters = now + COUNTERS_READ_SECONDS
-                next_refresh = now + poll_interval
+            if chunk:
+                session.feed(chunk, now)
+            session.tick(now)
+            data = session.take_output()
+            if data:
+                writer.write(data)
                 await writer.drain()
-            if next_settings is not None and now >= next_settings:
-                pending_reads.extend(slot for slot in SETTINGS if slot not in pending_reads)
-                next_settings = now + SETTINGS_READ_SECONDS
-            if pending_reads:  # one per loop: the portal never sends a large burst either
-                publish({f"PRD {pending_reads.pop(0)}": "VAL"})
-                await writer.drain()
-            if rstat_at is not None and now >= rstat_at:
-                request("RSTAT", "ALL")
-                rstat_at = None
-                await writer.drain()
-            if retry_cloud and now - last_probe >= self.config["cloud_retry_interval"]:
-                last_probe = now
-                if await self._cloud_reachable():
-                    self._event("cloud_back_closing_local_session")
-                    self.state.last_session_end = "cloud back"
-                    return
+            if session.close_reason:
+                self.state.last_session_end = session.close_reason
+                return
 
     async def _serve(self, session: Session, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        mode = self.config["connection_mode"]
-        if mode == "local":
+        if self.config["connection_mode"] == "local":
             await self.local(reader, writer)
             return
         initial = await self._read_connect(reader)
@@ -967,16 +421,13 @@ class Gateway:
         except CloudUnavailable as exc:
             self.state.last_session_end = f"cloud: {exc}"
             self._event("cloud_unavailable", reason=str(exc))
-            if mode == "cloud_proxy_fallback":
-                await self.local(reader, writer, initial=initial, retry_cloud=True)
             return
         await self.online(session, reader, writer, cloud_reader, cloud_writer, initial, first)
 
     async def handle_module(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         if (peer[0] if peer else "") != self.config["module_ip"]:
-            # The Supervisor watchdog also ends up here, from the internal network.
-            if peer and not peer[0].startswith("172.30."):
+            if peer and not peer[0].startswith("172.30."):  # the internal network of the Supervisor
                 self.state.rejected_ip = peer[0]
                 LOG.warning("Rejected a connection from %s: not module_ip", peer[0])
             writer.close()
@@ -989,6 +440,7 @@ class Gateway:
         if previous is not None:
             # A WiFi module that rebooted leaves no FIN behind; the newest connection is always the real one.
             self._event("session_replaced")
+            self._local = None
             transport = previous.writer.transport
             if transport is not None:
                 transport.abort()
@@ -1009,8 +461,7 @@ class Gateway:
         finally:
             if self._current is session:
                 self._current = None
-                self._command = None
-                self._setting = None
+                self._local = None
                 self.state.module_connected = False
                 self.state.upstream_connected = False
                 self.state.mode = "idle"
@@ -1018,13 +469,25 @@ class Gateway:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
             session.done.set()
-            self._note_session_end()
+            self.state.note_session_end()
             self._event("session_closed", reason=self.state.last_session_end)
 
     async def _save_values_regularly(self) -> None:
         while True:
             await asyncio.sleep(VALUES_SAVE_SECONDS)
-            self.state.save_values()
+            await asyncio.to_thread(self.state.write_values, self.state.values_payload())
+
+    async def _announce(self) -> None:
+        """Tells Home Assistant where the app is. If this never works, the connection file still does the job."""
+        announced = self.config.get("announce")
+        if not announced:
+            return
+        for delay in (0, 10, 30, 60):
+            await asyncio.sleep(delay)
+            if await asyncio.to_thread(send_discovery, **announced):
+                self._event("discovery_sent", host=announced["host"])
+                return
+        self._event("discovery_failed")
 
     async def run(self) -> None:
         server = await asyncio.start_server(self.handle_module, self.config["listen_host"], self.config["listen_port"])
@@ -1038,10 +501,11 @@ class Gateway:
         for sig in (signal.SIGTERM, signal.SIGINT):
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, self.request_stop)
-        saving = asyncio.create_task(self._save_values_regularly())
+        background = [asyncio.create_task(self._save_values_regularly()), asyncio.create_task(self._announce())]
         await self._stop.wait()
         LOG.info("Stopping")
-        saving.cancel()
+        for task in background:
+            task.cancel()
         self.state.save_values()
         server.close()
         api.close()
@@ -1091,8 +555,7 @@ def api_token(path: str = "/data/api_token") -> str:
     except OSError:
         pass
     token = secrets.token_urlsafe(32)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(token)
+    atomic_write(path, token)
     return token
 
 
@@ -1109,13 +572,22 @@ def write_connection_file(port: int, token: str, address: str,
     try:
         if not os.path.isdir(os.path.dirname(target)):
             return
-        temporary = target + ".tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump({"host": address, "port": port, "token": token}, handle)
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, target)
+        atomic_write(target, json.dumps({"host": address, "port": port, "token": token}), 0o600)
     except OSError as exc:
         LOG.warning("Could not write the connection file: %s", type(exc).__name__)
+
+
+def send_discovery(url: str, supervisor_token: str, host: str, port: int, token: str, timeout: float = 10) -> bool:
+    """POST /discovery to the Supervisor, which passes the details to the integration. Sending it again changes nothing."""
+    body = json.dumps({"service": DISCOVERY_SERVICE, "config": {"host": host, "port": port, "token": token}}).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {supervisor_token}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except OSError as exc:  # URLError and HTTPError are OSError
+        LOG.warning("Discovery message not delivered: %s", type(exc).__name__)
+        return False
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -1133,10 +605,10 @@ def load_config(path: str) -> dict[str, Any]:
         "connect_timeout": 5.0,
         "read_interval_seconds": int(cfg.get("read_interval_seconds", READ_INTERVAL_SECONDS)),
         "first_poll_delay_seconds": 2.0,
-        "cloud_retry_interval": 60.0,
         "debug_journal": bool(cfg.get("debug_journal", False)),
         "alarm_path": "/data/alarms.json",
         "values_path": "/data/values.json",
+        "identity_path": "/data/module_identity.json",
     }
     if result["connection_mode"] not in MODES:
         raise ValueError("Invalid connection_mode")
@@ -1157,6 +629,10 @@ def main() -> None:
     config["api_token"] = api_token()
     install_integration()
     write_connection_file(config["api_port"], config["api_token"], own_address())
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if supervisor_token:
+        config["announce"] = {"url": "http://supervisor/discovery", "supervisor_token": supervisor_token,
+                              "host": socket.gethostname(), "port": config["api_port"], "token": config["api_token"]}
     asyncio.run(Gateway(config, Journal(JOURNAL_PATH, debug=config["debug_journal"])).run())
 
 
