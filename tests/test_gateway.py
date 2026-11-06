@@ -729,6 +729,32 @@ class StopTests(Base):
         self.assertFalse(gateway.state.module_connected)
 
 
+class InstallTests(unittest.TestCase):
+    def test_bundled_integration_matches_the_source(self):
+        source = ROOT / "custom_components/centrometal_local"
+        bundled = ROOT / "centrometal_local_mqtt/integration/centrometal_local"
+        names = sorted(p.relative_to(source).as_posix() for p in source.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+        self.assertEqual(names, sorted(p.relative_to(bundled).as_posix() for p in bundled.rglob("*") if p.is_file() and "__pycache__" not in p.parts))
+        for name in names:
+            self.assertEqual((source / name).read_bytes(), (bundled / name).read_bytes(), name)
+
+    def test_install_copies_once_and_keeps_going_without_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "src"
+            (source / "brand").mkdir(parents=True)
+            (source / "a.py").write_text("1")
+            (source / "brand" / "i.png").write_text("2")
+            config = Path(folder) / "config"
+            (config / "custom_components").mkdir(parents=True)
+            target = config / "custom_components" / "x"
+            self.assertTrue(g.install_integration(str(source), str(target)))
+            self.assertEqual((target / "brand" / "i.png").read_text(), "2")
+            self.assertFalse(g.install_integration(str(source), str(target)))
+            (source / "a.py").write_text("3")
+            self.assertTrue(g.install_integration(str(source), str(target)))
+            self.assertFalse(g.install_integration(str(source), str(Path(folder) / "nu" / "exista" / "x")))
+
+
 class JournalModeTests(Base):
     async def test_normal_mode_keeps_only_new_keys_and_events(self):
         with tempfile.TemporaryDirectory() as folder:

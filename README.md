@@ -55,11 +55,9 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 
 ## Installation
 
-1. **Add the project.**
-   - App: Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
-   - Integration: HACS → ⋮ → Custom repositories, same URL, type Integration. Without HACS, copy `custom_components/centrometal_local/` to your configuration folder.
-2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it.
-3. **Restart Home Assistant** and add the integration Centrometal Local MQTT Protocol, with host `127.0.0.1` and port `8765`.
+1. **Add the repository.** Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
+2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it. The app installs the Home Assistant integration by itself.
+3. **Restart Home Assistant once** and add the integration Centrometal Local MQTT Protocol. Host `127.0.0.1` and port `8765` are already filled in.
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:
 
    | Field | Value |
