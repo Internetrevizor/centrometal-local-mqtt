@@ -259,6 +259,9 @@ class State:
             if name in self.at_commands or len(self.at_commands) < MAX_AT_COMMANDS:
                 self.at_commands[name] = self.at_commands.get(name, 0) + count
         self._journal_at_lines(skipped)
+        if self.journal and self.journal.debug:
+            # In clear, to learn what these bytes are: only with debug_journal, and only in that file.
+            self.journal.write("skipped_raw", length=len(skipped), text=skipped.decode("ascii", "backslashreplace"))
         return kind, commands
 
     def _journal_at_lines(self, skipped: bytes) -> None:

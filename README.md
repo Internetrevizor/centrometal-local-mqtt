@@ -125,7 +125,7 @@ The app updates from the app store and the integration from HACS, separately. Up
 | `connection_mode` | `local` or `cloud_proxy`, see above |
 | `upstream_host` | The portal's name, used only by `cloud_proxy` |
 | `read_interval_seconds` | Time between read requests, 10 to 240, default 60. One answer is about 1.3 kB. What matters during a burn arrives by itself |
-| `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without MQTT password, token or signature. It also writes the AT commands the controller leaks, with their arguments, as `at_text`: these can hold a WiFi network name and password, so turn it off and delete the file when you are done. Normally only new parameter names and session events are written |
+| `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without MQTT password, token or signature. It also writes the AT commands the controller leaks, with their arguments, as `at_text`, and every skipped byte in clear as `skipped_raw`: these can hold a WiFi network name and password, a token or the MQTT password, so turn it off and delete the files when you are done, and do not share them. Normally only new parameter names and session events are written |
 
 ## Going back
 

@@ -421,6 +421,30 @@ class ATArgumentsTests(unittest.TestCase):
         self.assertIn("AT+CWLIF x2", first)
         self.assertIn("AT+CWLIF x1", module.state.last_malformed)
 
+    def test_skipped_bytes_reach_the_journal_in_clear_with_debug_on(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, path = self.state(folder, True)
+            state.note_skipped(1, b'{"_token":"abc"}\xff\r\n' + self.SECRET)
+            found = [e for e in self.events(path) if e["e"] == "skipped_raw"]
+            self.assertEqual(found[0]["length"], 19 + len(self.SECRET))
+            self.assertIn('"_token":"abc"', found[0]["text"])
+            self.assertIn("\\xff", found[0]["text"])
+            self.assertIn("hotspot-password", found[0]["text"])
+
+    def test_skipped_bytes_stay_out_of_everything_else(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, _ = self.state(folder, True)
+            state.note_skipped(1, b'{"_token":"abc"}' + self.SECRET)
+            for text in (json.dumps(state.meta()), state.values_payload(), state.last_malformed):
+                self.assertNotIn("abc", text)
+                self.assertNotIn("hotspot-password", text)
+
+    def test_skipped_bytes_are_not_written_with_debug_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state, path = self.state(folder, False)
+            state.note_skipped(1, b'{"_token":"abc"}')
+            self.assertEqual(self.events(path), [])
+
     def test_nothing_is_sent_back_with_debug_on(self):
         with tempfile.TemporaryDirectory() as folder:
             state, _ = self.state(folder, True)
