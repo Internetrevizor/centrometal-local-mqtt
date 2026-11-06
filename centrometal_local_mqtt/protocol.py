@@ -18,6 +18,7 @@ COMMAND_RE = re.compile(r"^(CMD|PWR|SCCMD)\b")  # PRD only reads a settings tabl
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")  # controller manual, chapter 6: errors, warnings, information
 ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # scr34m acknowledges errors and warnings
 AT_NAME_RE = re.compile(rb"(?<![A-Za-z0-9])AT(?:\+[A-Z0-9_]{1,20})?(?=[\r\n=?])")
+AT_LINE_RE = re.compile(rb"(?<![A-Za-z0-9])AT(?:\+[A-Z0-9_]{1,20})?(?:[=?][\x20-\x7e]{0,200})?(?=[\r\n])")
 
 
 def signing_key(password: bytes) -> bytes:
@@ -224,6 +225,12 @@ def at_commands(skipped: bytes) -> dict[str, int]:
     if b"+++" in skipped:
         counts["+++"] = skipped.count(b"+++")
     return dict(counts)
+
+
+def at_lines(skipped: bytes) -> dict[str, int]:
+    """Whole AT commands with their arguments, and nothing else from the skipped bytes. They can hold a WiFi password:
+    only the debug journal may receive this."""
+    return dict(collections.Counter(line.decode("ascii") for line in AT_LINE_RE.findall(skipped)))
 
 
 class MQTTFrames:

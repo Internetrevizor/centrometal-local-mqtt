@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from parameters import MAX_AGE_SECONDS, valid_raw
-from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, at_commands, redact
+from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, at_commands, at_lines, redact
 
 LOG = logging.getLogger("peltec-gateway")
 ALARM_HISTORY = 50
@@ -147,6 +147,7 @@ class State:
         self.sessions_closed = 0
         self.close_reasons: dict[str, int] = {}
         self.at_commands: dict[str, int] = {}
+        self._at_tail = b""
         self.last_malformed = ""
         self.rejected_ip = ""
         self._load_values()
@@ -257,7 +258,19 @@ class State:
         for name, count in commands.items():
             if name in self.at_commands or len(self.at_commands) < MAX_AT_COMMANDS:
                 self.at_commands[name] = self.at_commands.get(name, 0) + count
+        self._journal_at_lines(skipped)
         return kind, commands
+
+    def _journal_at_lines(self, skipped: bytes) -> None:
+        """Only with debug_journal, and only in that file: not in the state, the API, the entities or the database."""
+        if not self.journal or not self.journal.debug:
+            return
+        text = self._at_tail + skipped
+        end = max(text.rfind(b"\r"), text.rfind(b"\n")) + 1
+        self._at_tail = text[end:][-240:]  # a command cut by the end of a TCP segment
+        lines = at_lines(text[:end])
+        if lines:
+            self.journal.write("at_text", lines=lines)
 
     def note_status_request(self) -> None:
         self.status_requests_sent += 1

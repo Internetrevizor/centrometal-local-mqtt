@@ -7,7 +7,8 @@ connection_mode:
 
 In local mode the server sends protocol acknowledgements, the read requests REFRESH, RSTAT and PRD, and, when asked
 through the local API, CMD 0/1 and PWR for the settings listed in parameters.LIMITS, within their limits. Nothing else can
-be emitted. Never logs or stores the MQTT password, _token, _sign or the installation ID.
+be emitted. Never logs or stores the MQTT password, _token, _sign or the installation ID. With debug_journal on, the journal
+file also receives the AT commands the controller leaks, with their arguments, which can hold a WiFi password; only that file.
 
 This file holds the sockets and the API. The protocol is in protocol.py, one module connection in session.py, the commands
 in commands.py and what is remembered in store.py: none of those touch a socket.
@@ -96,7 +97,7 @@ class MQTTObserver:
                     self.session.key = signing_key(read_connect_password(body))
                 elif kind == 3:
                     self._publish(header, body)
-            if isinstance(self.frames, ModuleFrames) and self.frames.runs:
+            if isinstance(self.frames, ModuleFrames) and (self.frames.runs or self.frames.skipped):
                 self.state.note_skipped(self.frames.runs, bytes(self.frames.skipped))
                 self.frames.runs = 0
                 self.frames.skipped.clear()

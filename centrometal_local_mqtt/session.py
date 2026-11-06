@@ -72,7 +72,7 @@ class LocalSession:
     def feed(self, data: bytes, now: float) -> None:
         for head, body in self.frames.feed(data):
             self._frame(head, body, now)
-        if self.frames.runs:
+        if self.frames.runs or self.frames.skipped:  # a run can go on in the next TCP segment
             # The portal drops the connection on these; here they are skipped and never answered. Every message is still
             # checked by its signature. Only the length, the kind and the AT names are kept: the bytes could hold a token.
             kind, commands = self.state.note_skipped(self.frames.runs, bytes(self.frames.skipped))
