@@ -97,7 +97,7 @@ class MQTTObserver:
                 elif kind == 3:
                     self._publish(header, body)
             if isinstance(self.frames, ModuleFrames) and self.frames.runs:
-                self.state.malformed_frames += self.frames.runs
+                self.state.note_skipped(self.frames.runs, bytes(self.frames.skipped))
                 self.frames.runs = 0
                 self.frames.skipped.clear()
         except Exception as exc:  # pylint: disable=broad-except

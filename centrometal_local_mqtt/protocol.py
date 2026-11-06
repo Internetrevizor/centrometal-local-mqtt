@@ -1,6 +1,7 @@
 """The wire format of the WiFi module: MQTT frames and signed JSON. No sockets, no clock, no state beyond a read buffer."""
 from __future__ import annotations
 
+import collections
 import hashlib
 import hmac
 import json
@@ -16,6 +17,7 @@ FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_ /.]{0,79}$")  # real key: B_PTV/GRI
 COMMAND_RE = re.compile(r"^(CMD|PWR|SCCMD)\b")  # PRD only reads a settings table
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")  # controller manual, chapter 6: errors, warnings, information
 ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # scr34m acknowledges errors and warnings
+AT_NAME_RE = re.compile(rb"(?<![A-Za-z0-9])AT(?:\+[A-Z0-9_]{1,20})?(?=[\r\n=?])")
 
 
 def signing_key(password: bytes) -> bytes:
@@ -214,6 +216,14 @@ def module_frame_end(buf: bytearray) -> int | None:
 
 def redact(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k not in ("_sign", "_token")}
+
+
+def at_commands(skipped: bytes) -> dict[str, int]:
+    """How many times each AT command name appears. Only the name: what follows it could be a network name or a password."""
+    counts = collections.Counter(name.decode("ascii") for name in AT_NAME_RE.findall(skipped))
+    if b"+++" in skipped:
+        counts["+++"] = skipped.count(b"+++")
+    return dict(counts)
 
 
 class MQTTFrames:
