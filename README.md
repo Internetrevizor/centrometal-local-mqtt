@@ -6,6 +6,13 @@ Community project, not affiliated with Centrometal. No firmware change and no wi
 
 **Tested on one boiler:** PelTec II Lambda, firmware v3.03dL, scheme 43 (buffer + K1 DHW). Other models and schemes need their own check.
 
+## Install
+
+The app and the integration install separately, from these two buttons. The full steps are under [Installation](#installation), and the module's traffic still has to be redirected in your router.
+
+[![Add the app repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FInternetrevizor%2Fcentrometal-local-mqtt)
+[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Internetrevizor&repository=centrometal-local-mqtt&category=integration)
+
 ## How it works
 
 The module connects to `portal.centrometal.hr` on TCP 1883 using plain MQTT. You redirect that connection, for this one device, to Home Assistant. The server here then answers it the way the portal does: it acknowledges the handshake and the heartbeat, asks for values, and passes on/off.
@@ -75,10 +82,20 @@ Tested on one real boiler: `local` and `cloud_proxy`.
 
 ## Installation
 
-1. **Add the repository.** Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
+1. **Add the repository.** Use the button, or go to Settings → Apps → App store → ⋮ → Repositories and add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
+
+   [![Add the app repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FInternetrevizor%2Fcentrometal-local-mqtt)
+
 2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it.
-3. **Install the integration with HACS.** HACS → ⋮ → Custom repositories, add the same URL with the type Integration, then download Centrometal Local MQTT Protocol and restart Home Assistant. HACS installs integrations only, which is why the app comes from the app store.
+3. **Install the integration with HACS.** Use the button, or go to HACS → ⋮ → Custom repositories and add the same URL with the type Integration.
+
+   [![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Internetrevizor&repository=centrometal-local-mqtt&category=integration)
+
+   Then download Centrometal Local MQTT Protocol and restart Home Assistant. HACS installs integrations only, which is why the app comes from the app store.
    The app announces itself: the boiler appears under Discovered in Settings → Devices & services. Confirm it, nothing has to be typed.
+
+   [![Open Devices and services](https://my.home-assistant.io/badges/integrations.svg)](https://my.home-assistant.io/redirect/integrations/)
+
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:
 
    | Field | Value |
