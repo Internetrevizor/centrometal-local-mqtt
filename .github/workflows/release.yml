@@ -1,23 +1,63 @@
 name: Release
 
 # HACS takes versions from GitHub releases: a tag alone is not enough.
+# A push to main that carries a version with no release yet publishes it, after the tests pass;
+# so does pushing a tag v<version> by hand. The app image must already exist for that version
+# (see image.yml: the version reaches main through a rework-* branch).
 on:
   push:
+    branches: [main]
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      new: ${{ steps.version.outputs.new }}
     steps:
       - uses: actions/checkout@v6
-      - name: The tag, the integration and the app have the same version
+        with:
+          fetch-depth: 0
+      - name: The integration and the app have the same version, and it has no release yet
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          grep -q "\"version\": \"$version\"" custom_components/centrometal_local/manifest.json
+          version=$(python3 -c "import json; print(json.load(open('custom_components/centrometal_local/manifest.json'))['version'])")
           grep -q "^version: $version$" centrometal_local_mqtt/config.yaml
-      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          tag="v${version}"
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "${tag}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version ${version}"; exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "${tag} is already released; nothing to do."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  tests:
+    needs: version
+    if: needs.version.outputs.new == 'true'
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    needs: [version, tests]
+    if: needs.version.outputs.new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - run: gh release create "${{ needs.version.outputs.tag }}" --target "${GITHUB_SHA}" --title "${{ needs.version.outputs.tag }}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
