@@ -1,6 +1,7 @@
 """Regression tests for the gateway, on loopback only. Run with: python -B -m unittest discover -s tests -v
 PELTEC_PCAP = path of the private capture (optional); its secrets are never printed."""
 import asyncio
+import importlib
 import importlib.util
 import json
 import logging
@@ -76,7 +77,7 @@ def free_port():
 def config(**overrides):
     cfg = dict(module_ip="127.0.0.1", connection_mode="local", upstream_host="127.0.0.1", upstream_port=free_port(),
                listen_host="127.0.0.1", listen_port=0, api_host="127.0.0.1", api_port=0, connect_timeout=.3,
-               poll_interval_seconds=60, first_poll_delay_seconds=60, cloud_retry_interval=60)
+               read_interval_seconds=60, first_poll_delay_seconds=60, cloud_retry_interval=60)
     cfg.update(overrides)
     return cfg
 
@@ -99,7 +100,7 @@ class ProtocolTests(unittest.TestCase):
             path.write_text(json.dumps({"module_ip": "192.0.2.10"}))
             cfg = g.load_config(str(path))
             self.assertEqual(cfg["connection_mode"], "local")
-            self.assertEqual(cfg["poll_interval_seconds"], 240)
+            self.assertEqual(cfg["read_interval_seconds"], 10)
             path.write_text(json.dumps({"connection_mode": "x"}))
             with self.assertRaises(ValueError):
                 g.load_config(str(path))
@@ -196,7 +197,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
 class LocalTests(Base):
     async def test_refresh_then_rstat_and_nothing_else(self):
-        gateway, port = await self.start(first_poll_delay_seconds=0, poll_interval_seconds=2)
+        gateway, port = await self.start(first_poll_delay_seconds=0, read_interval_seconds=2)
         reader, _ = await self.handshake(port)
         seen = []
         while len(seen) < 3:
@@ -258,7 +259,7 @@ class LocalTests(Base):
         self.assertTrue(gateway.state.module_connected, "the old session must not clear the state of the new one")
 
     async def test_etimedout_ends_session_without_blocking_loop(self):
-        gateway = g.Gateway(config(first_poll_delay_seconds=3, poll_interval_seconds=3))
+        gateway = g.Gateway(config(first_poll_delay_seconds=3, read_interval_seconds=3))
         captured = {}
         original = gateway.local
 
@@ -322,7 +323,7 @@ class ProxyTests(Base):
                 await writer.drain()
         _, cloud_port = await self.cloud(handler=handler)
         gateway, port = await self.start(connection_mode="cloud_proxy", upstream_port=cloud_port,
-                                         first_poll_delay_seconds=0, poll_interval_seconds=10)
+                                         first_poll_delay_seconds=0, read_interval_seconds=10)
         reader, writer = await self.module(port)
         writer.write(connect())
         await writer.drain()
@@ -518,6 +519,13 @@ class ParameterTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "custom_components/centrometal_local"))
         import parameters
         cls.p = parameters
+
+    def test_commands_stay_available_during_a_short_reconnect(self):
+        self.assertTrue(self.p.commands_available({"connection_mode": "local", "mode": "idle", "data_fresh": True}))
+        self.assertFalse(self.p.commands_available({"connection_mode": "local", "mode": "idle", "data_fresh": False}))
+        self.assertFalse(self.p.commands_available({"connection_mode": "cloud_proxy", "mode": "proxy", "data_fresh": True}))
+        self.assertTrue(self.p.commands_available({"connection_mode": "cloud_proxy_fallback", "mode": "local", "data_fresh": True}))
+        self.assertFalse(self.p.commands_available(None))
 
     def test_display_values_match_the_cloud_integration(self):
         show = self.p.display_value
@@ -718,6 +726,262 @@ class MalformedTests(Base):
         self.assertTrue(state.snapshot()["data_fresh"])
 
 
+class ModuleStreamTests(Base):
+    AT = b"AT+CWLIF\r\n" * 8 + b"AT+CW"
+
+    def test_clean_frames_pass_unchanged(self):
+        frames = g.ModuleFrames()
+        stream = connect() + subscribe() + up({"B_Tk1": 60, "clMsgId": 1}) + g.frame(0xC0) + g.frame(0xE0)
+        self.assertEqual([h >> 4 for h, _ in frames.feed(stream)], [1, 8, 3, 12, 14])
+        self.assertEqual(frames.runs, 0)
+
+    def test_a_frame_arriving_byte_by_byte_is_not_skipped(self):
+        frames = g.ModuleFrames()
+        seen = []
+        for byte in connect() + up({"B_Tk1": 60, "clMsgId": 1}):
+            seen.extend(frames.feed(bytes([byte])))
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(frames.runs, 0)
+
+    def test_at_text_from_the_capture_loses_nothing(self):
+        frames = g.ModuleFrames()
+        first, second = up({"B_Tk1": 60, "clMsgId": 1}), up({"B_Tk1": 61, "clMsgId": 2})
+        decoded = frames.feed(first + self.AT + second)
+        self.assertEqual(len(decoded), 2)
+        self.assertEqual(frames.runs, 1)
+        self.assertIn(b"AT+", frames.skipped)
+
+    def test_at_text_inside_a_message_costs_only_that_message(self):
+        frames = g.ModuleFrames()
+        cut, good = up({"B_Tk1": 60, "clMsgId": 1}), up({"B_Tk1": 61, "clMsgId": 2})
+        decoded = frames.feed(cut[:40] + self.AT + good + up({"B_Tk1": 62, "clMsgId": 3}))
+        values = [g.verify_payload(g.get_publish(h, b)[1], KEY)["B_Tk1"] for h, b in decoded]
+        self.assertEqual(values, [61, 62])
+
+    def test_huge_declared_length_does_not_hold_back_the_next_messages(self):
+        frames = g.ModuleFrames()
+        decoded = frames.feed(b"\x30" + g.varint(500000) + b"\x00\x10cm.inst.peltec2" + up({"B_Tk1": 61, "clMsgId": 2}))
+        self.assertEqual(len(decoded), 1)
+
+    def test_digits_read_as_publish_do_not_stop_anything(self):
+        frames = g.ModuleFrames()
+        decoded = frames.feed(b"0123456789012345" + up({"B_Tk1": 61, "clMsgId": 2}))
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(frames.runs, 1)
+
+    async def test_session_survives_and_counts_it(self):
+        gateway, port = await self.start()
+        _, writer = await self.handshake(port)
+        writer.write(self.AT + b"0123" + up({"B_Tk1": 61, "clMsgId": 200}))
+        await writer.drain()
+        await asyncio.sleep(.2)
+        self.assertTrue(gateway.state.module_connected)
+        self.assertEqual(gateway.state.values["B_Tk1"], 61)
+        self.assertEqual(gateway.state.malformed_frames, 1)
+        self.assertIn("AT text", gateway.state.last_malformed)
+        self.assertEqual(gateway.state.sessions_closed, 0)
+
+
+class PendingCommandTests(Base):
+    async def wait_for_key(self, reader, key, timeout):
+        end = time.monotonic() + timeout
+        while True:
+            message = await next_message(reader, max(.1, end - time.monotonic()))
+            if key in message:
+                return message
+
+    async def test_command_during_a_reconnect_arrives_after_it(self):
+        gateway, port = await self.start(first_poll_delay_seconds=0)
+        _, writer = await self.handshake(port)
+        writer.write(up({"B_CMD": 0, "clMsgId": 200}))
+        await writer.drain()
+        await asyncio.sleep(.1)
+        writer.close()
+        await asyncio.sleep(.1)
+        self.assertFalse(gateway.state.module_connected)
+        self.assertTrue(gateway.command(1))
+        reader, _ = await self.handshake(port)
+        self.assertEqual((await self.wait_for_key(reader, "CMD", 5))["CMD"], 1)
+
+    async def test_no_repeat_when_the_first_answer_shows_it_arrived(self):
+        gateway, port = await self.start(first_poll_delay_seconds=0)
+        _, writer = await self.handshake(port)
+        writer.write(up({"B_CMD": 0, "clMsgId": 200}))
+        await writer.drain()
+        await asyncio.sleep(.1)
+        writer.close()
+        await asyncio.sleep(.1)
+        gateway.command(1)
+        reader, writer = await self.handshake(port)
+        writer.write(up({"B_CMD": 1, "clMsgId": 201}))
+        await writer.drain()
+        await asyncio.sleep(.1)
+        self.assertIsNone(gateway.status()["pending_command"])
+
+    async def test_echo_ends_the_repeats(self):
+        gateway, port = await self.start()
+        reader, writer = await self.handshake(port)
+        writer.write(up({"B_CMD": 0, "clMsgId": 200}))
+        await writer.drain()
+        await asyncio.sleep(.1)
+        self.assertTrue(gateway.command(1))
+        self.assertEqual((await self.wait_for_key(reader, "CMD", 2))["CMD"], 1)
+        self.assertEqual(gateway.status()["pending_command"], 1)
+        writer.write(up({"B_CMD": 1, "clMsgId": 201}))
+        await writer.drain()
+        await asyncio.sleep(.1)
+        self.assertIsNone(gateway.status()["pending_command"])
+
+    async def test_repeated_without_echo_then_given_up(self):
+        old = g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS
+        g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS = .2, 1.2
+        try:
+            gateway, port = await self.start()
+            reader, _ = await self.handshake(port)
+            self.assertTrue(gateway.command(1))
+            await self.wait_for_key(reader, "CMD", 1)
+            await self.wait_for_key(reader, "CMD", 1)
+            await asyncio.sleep(1.5)
+            self.assertIsNone(gateway.status()["pending_command"])
+        finally:
+            g.COMMAND_RETRY_SECONDS, g.COMMAND_GIVE_UP_SECONDS = old
+
+    async def test_fallback_mode_needs_a_session(self):
+        gateway = g.Gateway(config(connection_mode="cloud_proxy_fallback"))
+        gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
+        self.assertFalse(gateway.command(1))
+
+    async def test_no_fresh_readings_no_command(self):
+        gateway = g.Gateway(config())
+        self.assertFalse(gateway.command(1))
+
+
+class ValuesAcrossRestartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_values_keep_their_age(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "v.json")
+            state = g.State(values_path=path)
+            state.ingest({"B_Tak1_1": 60, "clMsgId": 1})
+            state.value_times["B_Tak1_1"] -= 100
+            state.save_values()
+            again = g.State(values_path=path).snapshot()
+            self.assertEqual(again["values"]["B_Tak1_1"], 60)
+            self.assertGreaterEqual(again["value_age_seconds"]["B_Tak1_1"], 100)
+            self.assertTrue(again["data_fresh"])
+
+    async def test_values_older_than_eight_minutes_are_not_fresh(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "v.json")
+            state = g.State(values_path=path)
+            state.ingest({"B_Tak1_1": 60, "clMsgId": 1})
+            state.value_times["B_Tak1_1"] -= 500
+            state.save_values()
+            self.assertFalse(g.State(values_path=path).snapshot()["data_fresh"])
+
+    async def test_broken_or_missing_file_is_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "v.json")
+            self.assertEqual(g.State(values_path=path).values, {})
+            Path(path).write_text("{nu")
+            self.assertEqual(g.State(values_path=path).values, {})
+
+
+def load_integration():
+    """The integration package with just enough of Home Assistant and aiohttp stubbed to run its own logic."""
+    class ClientError(Exception):
+        pass
+
+    class UpdateFailed(Exception):
+        pass
+
+    class Coordinator:
+        def __init__(self, hass, logger, **kwargs):
+            self.hass, self.data = hass, None
+
+    def base():
+        class Base:
+            def __init__(self, *args, **kwargs):
+                pass
+        return Base
+
+    Base = base()
+    CoordinatorEntity = base()
+    stubs = {
+        "aiohttp": {"ClientError": ClientError, "ClientTimeout": lambda **kw: None},
+        "homeassistant": {},
+        "homeassistant.config_entries": {"ConfigEntry": object},
+        "homeassistant.const": {"UnitOfTemperature": types.SimpleNamespace(CELSIUS="C")},
+        "homeassistant.core": {"HomeAssistant": object},
+        "homeassistant.exceptions": {"HomeAssistantError": Exception},
+        "homeassistant.components": {},
+        "homeassistant.components.binary_sensor": {"BinarySensorDeviceClass": types.SimpleNamespace(CONNECTIVITY="c", PROBLEM="p"),
+                                                    "BinarySensorEntity": Base},
+        "homeassistant.components.number": {"NumberEntity": Base, "NumberMode": types.SimpleNamespace(BOX="box")},
+        "homeassistant.components.switch": {"SwitchEntity": Base},
+        "homeassistant.components.sensor": {"SensorDeviceClass": types.SimpleNamespace(TEMPERATURE="t"), "SensorEntity": Base,
+                                            "SensorStateClass": types.SimpleNamespace(MEASUREMENT="m", TOTAL_INCREASING="i")},
+        "homeassistant.helpers": {},
+        "homeassistant.helpers.entity": {"EntityCategory": types.SimpleNamespace(DIAGNOSTIC="d", CONFIG="c")},
+        "homeassistant.helpers.aiohttp_client": {"async_get_clientsession": None},
+        "homeassistant.helpers.update_coordinator": {"DataUpdateCoordinator": Coordinator, "UpdateFailed": UpdateFailed,
+                                                     "CoordinatorEntity": CoordinatorEntity},
+    }
+    for name, fields in stubs.items():
+        module = types.ModuleType(name)
+        module.__dict__.update(fields)
+        module.__path__ = []
+        sys.modules[name] = module
+    folder = ROOT / "custom_components/centrometal_local"
+    spec = importlib.util.spec_from_file_location("centrometal_local", folder / "__init__.py",
+                                                  submodule_search_locations=[str(folder)])
+    package = importlib.util.module_from_spec(spec)
+    for name in [n for n in sys.modules if n.startswith("centrometal_local.")]:
+        del sys.modules[name]
+    sys.modules["centrometal_local"] = package
+    spec.loader.exec_module(package)
+    return package, ClientError, UpdateFailed
+
+
+class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
+    def coordinator(self, package, data):
+        coordinator = package.GatewayCoordinator.__new__(package.GatewayCoordinator)
+        coordinator.hass, coordinator.data = types.SimpleNamespace(), data
+        coordinator.host, coordinator.port, coordinator.token = "h", 1, None
+        coordinator._last_answer = None
+
+        async def reload():
+            pass
+        coordinator.async_load_connection = reload
+        return coordinator
+
+    def session_that_fails(self, package, error):
+        class Failing:
+            def get(self, *args, **kwargs):
+                raise error
+        package.async_get_clientsession = lambda hass: Failing()
+
+    async def test_app_silence_is_tolerated_for_120_seconds_then_not(self):
+        package, ClientError, UpdateFailed = load_integration()
+        self.session_that_fails(package, ClientError())
+        coordinator = self.coordinator(package, {"values": {"B_Tak1_1": 60}})
+        coordinator._last_answer = time.monotonic() - 100
+        self.assertEqual(await coordinator._async_update_data(), {"values": {"B_Tak1_1": 60}})
+        coordinator._last_answer = time.monotonic() - 121
+        with self.assertRaises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    async def test_nothing_to_keep_at_the_first_read(self):
+        package, ClientError, UpdateFailed = load_integration()
+        self.session_that_fails(package, ClientError())
+        with self.assertRaises(UpdateFailed):
+            await self.coordinator(package, None)._async_update_data()
+
+    def test_all_platforms_import(self):
+        load_integration()
+        for name in ("sensor", "binary_sensor", "switch", "number"):
+            importlib.import_module(f"centrometal_local.{name}")
+
+
 class StopTests(Base):
     async def test_stop_request_ends_the_app_and_the_session(self):
         port = free_port()
@@ -873,7 +1137,7 @@ class LiveUpdateTests(Base):
         self.assertGreater(time.monotonic() - start, .35)
 
     async def test_counters_are_not_asked_at_every_refresh(self):
-        gateway, port = await self.start(first_poll_delay_seconds=0, poll_interval_seconds=1)
+        gateway, port = await self.start(first_poll_delay_seconds=0, read_interval_seconds=1)
         reader, _ = await self.handshake(port)
         seen = []
         end = time.monotonic() + 3.6

@@ -1,12 +1,12 @@
 """The writable PelTec settings. Limits come from the controller; what is shown is read back from it."""
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.const import UnitOfTemperature
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, number
+from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, commands_available, number
 from .sensor import device_info
+from .switch import _deliver
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -40,10 +40,8 @@ class PelTecSetting(CoordinatorEntity, NumberEntity):
 
     @property
     def available(self):
-        d = self.coordinator.data or {}
-        return self.coordinator.last_update_success and d.get("mode") == "local" and self.native_value is not None
+        return (self.coordinator.last_update_success and commands_available(self.coordinator.data)
+                and self.native_value is not None)
 
     async def async_set_native_value(self, value):
-        if not await self.coordinator.async_send_setting(self.slot, value):
-            raise HomeAssistantError("The local server refused this setting")
-        await self.coordinator.async_request_refresh()
+        await _deliver(self.coordinator, lambda: self.coordinator.async_send_setting(self.slot, value), "setting")

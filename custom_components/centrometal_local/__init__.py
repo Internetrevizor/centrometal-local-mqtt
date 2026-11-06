@@ -3,6 +3,7 @@ import asyncio
 from datetime import timedelta
 import json
 import logging
+import time
 
 from aiohttp import ClientError, ClientTimeout
 from homeassistant.config_entries import ConfigEntry
@@ -12,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
+APP_SILENCE_TOLERATED_SECONDS = 120  # an update of the app takes about a minute: entities stay as they are meanwhile
 
 
 def read_connection_file(path):
@@ -29,6 +31,7 @@ class GatewayCoordinator(DataUpdateCoordinator):
         super().__init__(hass, LOGGER, config_entry=entry, name="Centrometal Local MQTT Protocol",
                          update_interval=timedelta(seconds=60))
         self.host, self.port, self.token = host, port, None
+        self._last_answer = None
         self.connection_file = hass.config.path("custom_components", "centrometal_local", "gateway.json")
 
     async def async_load_connection(self):
@@ -50,9 +53,13 @@ class GatewayCoordinator(DataUpdateCoordinator):
                 obj = await response.json()
                 if not isinstance(obj, dict) or not isinstance(obj.get("values"), dict):
                     raise UpdateFailed("Malformed gateway status")
+                self._last_answer = time.monotonic()
                 return obj
         except (ClientError, TimeoutError, ValueError) as exc:
             await self.async_load_connection()
+            if self.data is not None and self._last_answer is not None \
+                    and time.monotonic() - self._last_answer < APP_SILENCE_TOLERATED_SECONDS:
+                return self.data
             raise UpdateFailed(f"Local server not reachable: {type(exc).__name__}") from exc
 
     async def async_follow_changes(self) -> None:
@@ -67,6 +74,7 @@ class GatewayCoordinator(DataUpdateCoordinator):
                     obj = await response.json()
                 if isinstance(obj, dict) and isinstance(obj.get("values"), dict):
                     revision = obj.get("revision", revision)
+                    self._last_answer = time.monotonic()
                     self.async_set_updated_data(obj)
                 continue
             except (ClientError, TimeoutError, ValueError):
