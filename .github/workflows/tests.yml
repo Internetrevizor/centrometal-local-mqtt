@@ -44,5 +44,17 @@ jobs:
       - uses: actions/checkout@v6
       - run: cp -r custom_components centrometal_local_mqtt/integration
       - run: docker build -t app centrometal_local_mqtt
-      - name: The image holds everything the app imports
-        run: docker run --rm app python3 -c "import sys; sys.path.insert(0, '/app'); import gateway; print(sorted(gateway.SETTINGS))"
+      - name: The app starts and answers under its real AppArmor profile
+        run: |
+          sudo apparmor_parser -r -W centrometal_local_mqtt/apparmor.txt
+          mkdir -p /tmp/app/data /tmp/app/share
+          echo '{"module_ip": "192.0.2.1"}' > /tmp/app/data/options.json
+          docker run -d --name app --security-opt apparmor=centrometal_local_mqtt \
+            -v /tmp/app/data:/data -v /tmp/app/share:/share app
+          sleep 5
+          docker logs app
+          test "$(docker inspect -f '{{.State.Running}}' app)" = true
+          test "$(docker inspect -f '{{.AppArmorProfile}}' app)" = centrometal_local_mqtt
+          curl -sf "http://$(docker inspect -f '{{.NetworkSettings.IPAddress}}' app):8765/health"
+          docker stop -t 5 app
+          test "$(docker inspect -f '{{.State.ExitCode}}' app)" = 0
