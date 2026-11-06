@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import signal
 import socket
 import struct
 import time
@@ -460,6 +461,10 @@ class Gateway:
         self._current: Session | None = None
         self._command = None
         self._setting = None
+        self._stop = asyncio.Event()
+
+    def request_stop(self) -> None:
+        self._stop.set()
 
     def setting(self, slot: Any, value: Any) -> bool:
         """PWR for one known slot, inside its limits, only in a synchronised local session."""
@@ -780,8 +785,21 @@ class Gateway:
                                          self.config["api_host"], self.config["api_port"])
         LOG.info("Gateway listening on TCP %s, mode %s; diagnostic API on %s:%s", self.config["listen_port"],
                  self.config["connection_mode"], self.config["api_host"], self.config["api_port"])
-        async with server, api:
-            await asyncio.gather(server.serve_forever(), api.serve_forever())
+        # The app runs as PID 1, where SIGTERM has no default action: without this handler the process ignores the stop
+        # request and Docker has to kill it after its timeout.
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with contextlib.suppress(NotImplementedError, RuntimeError):
+                loop.add_signal_handler(sig, self.request_stop)
+        await self._stop.wait()
+        LOG.info("Stopping")
+        server.close()
+        api.close()
+        current = self._current
+        if current is not None and current.writer.transport is not None:
+            current.writer.transport.abort()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(current.done.wait(), 2)
 
 
 def load_config(path: str) -> dict[str, Any]:
