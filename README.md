@@ -28,11 +28,22 @@ Every parameter the boiler sends becomes a sensor, with English names and the sa
 - `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
 
-To keep the same entity_ids, remove the cloud integration before adding this one.
+To keep the same entity_ids in `local` mode, remove the cloud integration before adding this one.
 
-## What you lose in local mode
+## Choose a mode
 
-The Centrometal portal and mobile app stop seeing the boiler, and so does the cloud integration. If Home Assistant is down, only the boiler's own panel remains, so keep it in mind before relying on this for heating.
+| `connection_mode` | Portal and app | Readings in Home Assistant | On/off and settings from this project |
+|---|---|---|---|
+| `local` (default) | Stop seeing the boiler | Always, also with no internet | Yes |
+| `cloud_proxy` (bypass) | Keep working | A copy of what passes through | No, use the portal or the cloud integration |
+| `cloud_proxy_fallback` | Keep working while the portal answers | Always | Only while the portal is down; it returns by itself when the portal is back |
+
+**Before you choose:**
+- In every mode the module's traffic goes through Home Assistant. If Home Assistant is down, the module reaches neither this server nor the portal; only the boiler's own panel remains. If you want the cloud to be independent of Home Assistant, do not install this at all.
+- `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
+- Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
+
+Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has only been tested in software.
 
 ## Requirements
 
@@ -68,7 +79,8 @@ The Centrometal portal and mobile app stop seeing the boiler, and so does the cl
 | Option | Meaning |
 |---|---|
 | `module_ip` | Only this IP is accepted |
-| `connection_mode` | `local`, or `cloud_proxy` for diagnostics: passes traffic to the portal unchanged and sends nothing of its own |
+| `connection_mode` | `local`, `cloud_proxy` or `cloud_proxy_fallback`, see above |
+| `upstream_host` | The portal's name, used only by the two proxy modes |
 | `poll_interval_seconds` | Time between read requests, default 240 |
 | `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without password, token or signature. Normally only new parameter names and session events are written |
 

@@ -1,8 +1,11 @@
 """Centrometal Local MQTT Protocol: local server for the WiFi module of a PelTec II Lambda. Python standard library only.
 
 connection_mode:
-  local        the module talks only to this server; the cloud is never contacted.
-  cloud_proxy  diagnostics: transparent TCP proxy to the portal; sends nothing of its own to the module.
+  local                 the module talks only to this server; the cloud is never contacted.
+  cloud_proxy           bypass: transparent TCP proxy to the portal, which keeps working; local readings are a copy.
+                        Sends nothing of its own to the module. Portal down = session closed, as with no proxy at all.
+  cloud_proxy_fallback  the same while the portal answers; this server takes over when it does not, and hands back
+                        when the portal returns.
 
 In local mode the server sends protocol acknowledgements, the read requests REFRESH, RSTAT and PRD, and, when asked
 through the local API, CMD 0/1 and PWR for the settings listed in SETTINGS, within their limits. Nothing else can be emitted.
@@ -36,7 +39,7 @@ COMMAND_RE = re.compile(r"^(CMD|PWR|SCCMD)\b")  # PRD only reads a settings tabl
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")  # controller manual, chapter 6: errors, warnings, information
 ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # scr34m acknowledges errors and warnings
 LOCAL_REQUESTS = {"REFRESH", "RSTAT"}
-MODES = ("local", "cloud_proxy")
+MODES = ("local", "cloud_proxy", "cloud_proxy_fallback")
 JOURNAL_PATH = "/share/centrometal_local_mqtt/journal.jsonl"
 DATA_FRESH_SECONDS = 480
 SETTINGS_READ_SECONDS = 3600
@@ -553,8 +556,20 @@ class Gateway:
             with contextlib.suppress(Exception):
                 await cloud_writer.wait_closed()
 
+    async def _cloud_reachable(self) -> bool:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.config["upstream_host"], self.config["upstream_port"]),
+                self.config["connect_timeout"])
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        return True
+
     async def local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                    initial: bytes = b"") -> None:
+                    initial: bytes = b"", retry_cloud: bool = False) -> None:
         """Minimal broker for one allowlisted WiFi module: protocol acknowledgements and REFRESH/RSTAT only."""
         self.state.mode = "local"
         self.state.upstream_connected = False
@@ -562,7 +577,8 @@ class Gateway:
         self._setting = None
         pending_reads: list[int] = []
         next_settings: float | None = None
-        self._event("local_session")
+        last_probe = time.monotonic()
+        self._event("local_session", retry_cloud=retry_cloud)
         frames = MQTTFrames()
         key: bytes | None = None
         subscribed = False
@@ -692,6 +708,12 @@ class Gateway:
                 request("RSTAT", "ALL")
                 rstat_at = None
                 await writer.drain()
+            if retry_cloud and now - last_probe >= self.config["cloud_retry_interval"]:
+                last_probe = now
+                if await self._cloud_reachable():
+                    self._event("cloud_back_closing_local_session")
+                    self.state.last_session_end = "cloud back"
+                    return
 
     async def _serve(self, session: Session, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         mode = self.config["connection_mode"]
@@ -704,6 +726,8 @@ class Gateway:
         except CloudUnavailable as exc:
             self.state.last_session_end = f"cloud: {exc}"
             self._event("cloud_unavailable", reason=str(exc))
+            if mode == "cloud_proxy_fallback":
+                await self.local(reader, writer, initial=initial, retry_cloud=True)
             return
         await self.online(session, reader, writer, cloud_reader, cloud_writer, initial, first)
 
@@ -775,6 +799,7 @@ def load_config(path: str) -> dict[str, Any]:
         "connect_timeout": 5.0,
         "poll_interval_seconds": int(cfg.get("poll_interval_seconds", 240)),
         "first_poll_delay_seconds": 2.0,
+        "cloud_retry_interval": 60.0,
         "debug_journal": bool(cfg.get("debug_journal", False)),
     }
     if result["connection_mode"] not in MODES:

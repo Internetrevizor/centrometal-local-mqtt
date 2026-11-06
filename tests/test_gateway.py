@@ -71,7 +71,7 @@ def free_port():
 def config(**overrides):
     cfg = dict(module_ip="127.0.0.1", connection_mode="local", upstream_host="127.0.0.1", upstream_port=free_port(),
                listen_host="127.0.0.1", listen_port=0, api_host="127.0.0.1", api_port=0, connect_timeout=.3,
-               poll_interval_seconds=60, first_poll_delay_seconds=60, )
+               poll_interval_seconds=60, first_poll_delay_seconds=60, cloud_retry_interval=60)
     cfg.update(overrides)
     return cfg
 
@@ -379,6 +379,41 @@ class ProxyTests(Base):
 
 
 
+
+    async def test_fallback_when_cloud_is_down_then_returns(self):
+        cloud_port = free_port()
+        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port,
+                                         cloud_retry_interval=.3)
+        reader, _ = await self.handshake(port)
+        self.assertEqual(gateway.state.mode, "local")
+        await self.cloud(port=cloud_port)
+        self.assertEqual(await asyncio.wait_for(reader.read(1), 4), b"")
+        reader2, writer2 = await self.module(port)
+        writer2.write(connect())
+        await writer2.drain()
+        self.assertEqual(await next_frame(reader2), (0x20, b"\x00\x00"))
+        self.assertEqual(gateway.state.mode, "proxy")
+
+
+    async def test_fallback_when_cloud_is_silent(self):
+        async def silent(reader, writer):
+            await asyncio.sleep(30)
+        _, cloud_port = await self.cloud(handler=silent)
+        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port)
+        await self.handshake(port)
+        self.assertEqual(gateway.state.mode, "local")
+
+
+    async def test_fallback_when_connack_refused(self):
+        async def refuse(reader, writer):
+            await reader.read(65536)
+            writer.write(g.frame(0x20, b"\x00\x05"))
+            await writer.drain()
+            await asyncio.sleep(30)
+        _, cloud_port = await self.cloud(handler=refuse)
+        gateway, port = await self.start(connection_mode="cloud_proxy_fallback", upstream_port=cloud_port)
+        await self.handshake(port)
+        self.assertEqual(gateway.state.mode, "local")
 
     async def test_dead_peer_detection_is_set_on_both_sockets(self):
         _, cloud_port = await self.cloud()
