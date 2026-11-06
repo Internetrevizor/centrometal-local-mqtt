@@ -65,7 +65,7 @@ class K1Circuit(CoordinatorEntity, SwitchEntity):
     """The K1 circuit, which loads the DHW tank on scheme 43. Written to slot 272, read from K1B_onOff."""
 
     _attr_has_entity_name = True
-    _attr_name = "K1 Heating Circuit"
+    _attr_name = "DHW Circuit"
     _attr_icon = "mdi:water-boiler"
 
     def __init__(self, coordinator, entry_id):
