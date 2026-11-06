@@ -116,7 +116,8 @@ class ProtocolTests(unittest.TestCase):
         state = g.State()
         state.ingest({"B_PTV/GRI_SEL": 0, "E8.1": "A", "W2.1": "B", "I19.1": "C", "E7X": 1, "clMsgId": 1})
         self.assertEqual(state.values["B_PTV/GRI_SEL"], 0)
-        self.assertEqual(state.snapshot()["alarms"], {"E8.1": "A", "W2.1": "B", "I19.1": "C"})
+        self.assertEqual(state.snapshot()["alarms"], {"E8.1": "A", "W2.1": "B"})
+        self.assertEqual([x["code"] for x in state.alarm_history], ["E8.1", "W2.1", "I19.1"])
 
     def test_settings_read_is_not_a_command(self):
         state = g.State()
@@ -802,6 +803,34 @@ class ApiSecurityTests(Base):
         except ConnectionError:
             pass
         self.assertEqual(gateway.state.snapshot()["rejected_ip"], "127.0.0.1")
+
+
+class AlarmTests(unittest.TestCase):
+    def test_active_cleared_and_history(self):
+        state = g.State()
+        state.ingest({"E12": "A", "W3": "B", "I19.1": "C", "clMsgId": 1})
+        self.assertEqual(state.snapshot()["alarms"], {"E12": "A", "W3": "B"})
+        self.assertEqual(len(state.alarm_history), 3)
+        state.ingest({"E12": "A", "clMsgId": 2})
+        self.assertEqual(len(state.alarm_history), 3)
+        state.ingest({"E12": "P", "clMsgId": 3})
+        self.assertEqual(state.snapshot()["alarms"], {"W3": "B"})
+        self.assertEqual(len(state.alarm_history), 4)
+
+    def test_alarms_survive_a_restart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "alarms.json")
+            first = g.State(alarm_path=path)
+            first.ingest({"E22": "A", "clMsgId": 1})
+            again = g.State(alarm_path=path)
+            self.assertEqual(again.active_alarms, {"E22": "A"})
+            self.assertEqual(again.alarm_history[0]["code"], "E22")
+
+    def test_broken_file_is_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "alarms.json")
+            Path(path).write_text("nu e json")
+            self.assertEqual(g.State(alarm_path=path).active_alarms, {})
 
 
 class JournalModeTests(Base):

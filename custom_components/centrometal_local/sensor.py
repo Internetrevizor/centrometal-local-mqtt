@@ -70,13 +70,17 @@ class EventHistory(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        alarms = (self.coordinator.data or {}).get("alarms") or {}
-        return ", ".join(sorted(alarms))[:250] if alarms else "No events"
+        d = self.coordinator.data or {}
+        alarms = d.get("alarms") or {}
+        if alarms:
+            return ", ".join(sorted(alarms))[:250]
+        return f"{len(d.get('alarm_history') or [])} past events" if d.get("alarm_history") else "No events"
 
     @property
     def extra_state_attributes(self):
-        alarms = (self.coordinator.data or {}).get("alarms") or {}
-        return {"Event count": len(alarms), "Events": alarms, "Original name": "Errors_History"}
+        d = self.coordinator.data or {}
+        history = d.get("alarm_history") or []
+        return {"Active": d.get("alarms") or {}, "Event count": len(history), "Events": history, "Original name": "Errors_History"}
 
 
 class PelTecValue(CoordinatorEntity, SensorEntity):

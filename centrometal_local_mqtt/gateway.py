@@ -46,6 +46,7 @@ MODES = ("local", "cloud_proxy", "cloud_proxy_fallback")
 JOURNAL_PATH = "/share/centrometal_local_mqtt/journal.jsonl"
 DATA_FRESH_SECONDS = 480
 SETTINGS_READ_SECONDS = 3600
+ALARM_HISTORY = 50
 # Writable slots of a PelTec II Lambda, with the controller's own limits (min, max), read from the portal 06.11.2026.
 SETTINGS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 272: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
 JOURNAL_MAX_BYTES = 10_000_000
@@ -269,8 +270,12 @@ class Journal:
 
 
 class State:
-    def __init__(self, journal: "Journal | None" = None) -> None:
+    def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None) -> None:
         self.journal = journal
+        self.alarm_path = alarm_path
+        self.active_alarms: dict[str, Any] = {}
+        self.alarm_history: list[dict[str, Any]] = []
+        self._load_alarms()
         self.seen_keys: set[str] = set()
         self.mode = "idle"
         self.module_connected = False
@@ -290,8 +295,42 @@ class State:
         self.last_session_end = ""
         self.rejected_ip = ""
 
+    def _load_alarms(self) -> None:
+        """Alarms survive a restart of the app: the boiler may not repeat them."""
+        if not self.alarm_path:
+            return
+        try:
+            with open(self.alarm_path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.active_alarms = dict(data.get("active", {}))
+            self.alarm_history = list(data.get("history", []))[-ALARM_HISTORY:]
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    def _note_alarm(self, code: str, value: Any) -> None:
+        """A value starting with P means the alarm has passed (scr34m); not yet seen on a PelTec II."""
+        cleared = str(value).startswith("P")
+        known = self.active_alarms.get(code)
+        if (cleared and code not in self.active_alarms) or (not cleared and known == value):
+            return
+        if cleared:
+            self.active_alarms.pop(code, None)
+        elif not code.startswith("I"):
+            self.active_alarms[code] = value
+        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        self.alarm_history = self.alarm_history[-ALARM_HISTORY:]
+        if self.alarm_path:
+            with contextlib.suppress(OSError):
+                temporary = self.alarm_path + ".tmp"
+                with open(temporary, "w", encoding="utf-8") as handle:
+                    json.dump({"active": self.active_alarms, "history": self.alarm_history}, handle)
+                os.replace(temporary, self.alarm_path)
+
     def ingest(self, signed: dict[str, Any]) -> None:
         self.verified_messages += 1
+        for code, value in signed.items():
+            if ALARM_RE.match(code):
+                self._note_alarm(code, value)
         telemetry = {
             k: v for k, v in signed.items()
             if FIELD_RE.fullmatch(k) and not k.endswith("_ACK")
@@ -345,7 +384,8 @@ class State:
             "rejected_ip": self.rejected_ip,
             "data_fresh": bool(t and now - t < DATA_FRESH_SECONDS),  # a reconnect of a few seconds is not an outage
             "malformed_frames": self.malformed_frames,
-            "alarms": {k: v for k, v in self.values.items() if ALARM_RE.match(k)},
+            "alarms": dict(self.active_alarms),
+            "alarm_history": self.alarm_history[-20:],
             "values": self.values.copy(),
             "value_age_seconds": {k: round(now - v, 1) for k, v in self.value_times.items()},
         }
@@ -468,7 +508,7 @@ class Gateway:
     def __init__(self, config: dict[str, Any], journal: Journal | None = None) -> None:
         self.config = config
         self.journal = journal or Journal(None)
-        self.state = State(self.journal)
+        self.state = State(self.journal, config.get("alarm_path"))
         self._current: Session | None = None
         self._command = None
         self._setting = None
@@ -894,6 +934,7 @@ def load_config(path: str) -> dict[str, Any]:
         "first_poll_delay_seconds": 2.0,
         "cloud_retry_interval": 60.0,
         "debug_journal": bool(cfg.get("debug_journal", False)),
+        "alarm_path": "/data/alarms.json",
     }
     if result["connection_mode"] not in MODES:
         raise ValueError("Invalid connection_mode")

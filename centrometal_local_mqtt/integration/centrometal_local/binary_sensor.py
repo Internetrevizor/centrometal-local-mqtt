@@ -3,12 +3,12 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import CONNECTION_ENTITY_ID
+from .parameters import ALARM_ENTITY_ID, CONNECTION_ENTITY_ID
 from .sensor import device_info
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities([ModuleConnection(entry.runtime_data, entry.entry_id)])
+    async_add_entities([ModuleConnection(entry.runtime_data, entry.entry_id), BoilerAlarm(entry.runtime_data, entry.entry_id)])
 
 
 class ModuleConnection(CoordinatorEntity, BinarySensorEntity):
@@ -26,3 +26,25 @@ class ModuleConnection(CoordinatorEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return bool((self.coordinator.data or {}).get("data_fresh"))
+
+
+class BoilerAlarm(CoordinatorEntity, BinarySensorEntity):
+    """On while the boiler reports an error (E) or a warning (W). Information messages (I) only go to Event History."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Alarm"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator, entry_id):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry_id}_alarm"
+        self._attr_device_info = device_info(entry_id)
+        self.entity_id = ALARM_ENTITY_ID
+
+    @property
+    def is_on(self):
+        return bool((self.coordinator.data or {}).get("alarms"))
+
+    @property
+    def extra_state_attributes(self):
+        return {"codes": sorted((self.coordinator.data or {}).get("alarms") or {})}

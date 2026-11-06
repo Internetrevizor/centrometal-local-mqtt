@@ -146,6 +146,7 @@ SWITCH_ENTITY_ID = "switch.peltec_ii_lambda_boiler_switch"
 K1_SWITCH_ENTITY_ID = "switch.k1_heating_circuit_off_on"
 K1_SWITCH_SLOT = 272
 CONNECTION_ENTITY_ID = "binary_sensor.centrometal_boiler_system_connection"
+ALARM_ENTITY_ID = "binary_sensor.peltec_ii_lambda_alarm"
 NUMBER_PREFIX = "number.technical_room_centrometal_peltec_ii_peltec_ii_lambda_"
 # slot: (name, step, object id, default)
 SETTINGS = {
