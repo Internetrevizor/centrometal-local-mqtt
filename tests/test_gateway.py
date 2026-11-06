@@ -522,6 +522,7 @@ class ParameterTests(unittest.TestCase):
         self.assertEqual(show("B_start", 3), "Cleaning")
         self.assertEqual(show("B_fireS", 0), "Off")
         self.assertEqual(show("K1B_zahP", 1), "On")
+        self.assertEqual(show("K1B_P", 0), "Off")
         self.assertEqual(show("B_razina", 2), "Full")
         self.assertEqual(show("B_specG", 0), "None")
         self.assertEqual(show("B_SUP_TYPE", 2), "Supervision + control")
@@ -547,11 +548,12 @@ class ParameterTests(unittest.TestCase):
         self.assertFalse(self.p.is_fresh(None))
 
     def test_every_pump_is_a_pump(self):
-        for number_ in (1, 2, 3, 4, 5, 9):
+        for number_ in (2, 3, 4, 5, 9):
             name, kind, _, _, entity_id = self.p.parameter_info(f"B_P{number_}")
-            self.assertIn(f"P{number_} Pump", name)
+            self.assertTrue(name.startswith(f"P{number_} ") and name.endswith("Pump"), name)
             self.assertEqual(kind, "map")
             self.assertEqual(entity_id, f"sensor.peltec_ii_lambda_p{number_}_pump")
+        self.assertEqual(self.p.parameter_info("K1B_P")[0], "P1 DHW Pump")
 
     def test_unknown_parameter_gets_a_raw_diagnostic_sensor(self):
         name, kind, _, diagnostic, entity_id = self.p.parameter_info("B_nou/2")
@@ -563,6 +565,14 @@ class ParameterTests(unittest.TestCase):
             self.assertFalse(self.p.is_entity(key), key)
         for key in ("SE00", "CMD_TIME", "B_dop"):
             self.assertTrue(self.p.is_entity(key), key)
+            self.assertFalse(self.p.enabled_by_default(key), key)
+        self.assertTrue(self.p.enabled_by_default("B_Tak1_1"))
+
+    def test_duplicates_and_missing_hardware_have_no_entity(self):
+        for key in ("B_P1", "B_Pk1_k2", "B_zahK1_K2", "B_Tkm1", "B_CMD", "K1B_onOff", "K1B_Prec", "K1B_Tsob", "K1B_Tsob1", "K1B_kor", "K1B_korN", "K1B_dayNight", "K1B_korType"):
+            self.assertFalse(self.p.is_entity(key), key)
+        self.assertEqual(self.p.parameter_info("K1B_Tpol1")[0], "DHW Temperature")
+        self.assertEqual(self.p.parameter_info("K1B_Tpol")[0], "DHW Target Temperature")
 
     def test_ids_and_names_are_unique_and_english(self):
         info = [self.p.parameter_info(k) for k in self.p.PARAMETERS]

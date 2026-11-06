@@ -25,6 +25,7 @@ Nothing else can be sent. Settings can be written only for the seven known slots
 Every parameter the boiler sends becomes a sensor, with English names and the same entity_ids as the cloud integration [hass-centrometal-boiler](https://github.com/Internetrevizor/hass-centrometal-boiler), so existing automations and dashboards keep working after you remove it. Translate names in Home Assistant. A parameter not seen before gets a diagnostic sensor under its raw name.
 
 - `switch.peltec_ii_lambda_boiler_switch`: boiler on/off (tested).
+- On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
 - `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
 
@@ -54,7 +55,9 @@ Tested on one real boiler: `local` and `cloud_proxy`. `cloud_proxy_fallback` has
 
 ## Installation
 
-1. **Copy or add the project.** Add this repository in Settings → Apps → App store → ⋮ → Repositories, or copy `centrometal_local_mqtt/` to `/addons/` (`/local_apps/` on newer systems). Copy `custom_components/centrometal_local/` to your configuration folder.
+1. **Add the project.**
+   - App: Settings → Apps → App store → ⋮ → Repositories, add `https://github.com/Internetrevizor/centrometal-local-mqtt`.
+   - Integration: HACS → ⋮ → Custom repositories, same URL, type Integration. Without HACS, copy `custom_components/centrometal_local/` to your configuration folder.
 2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it.
 3. **Restart Home Assistant** and add the integration Centrometal Local MQTT Protocol, with host `127.0.0.1` and port `8765`.
 4. **Redirect the module's traffic to Home Assistant, last.** Allow the module's network to reach Home Assistant on TCP 1883, then add a destination NAT rule:

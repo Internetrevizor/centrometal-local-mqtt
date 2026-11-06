@@ -36,18 +36,14 @@ PARAMETERS = {
     "B_Tak1_1": ("Puffer Upper", "temperature", None, False, "puffer_upper"),
     "B_Tak2_1": ("Puffer Lower", "temperature", None, False, "puffer_lower"),
     "B_Tk1": ("Core Temperature", "temperature", None, False, "core_temperature"),
-    "B_Tkm1": ("DHW Tank Temperature", "temperature", None, False, "dhw_temperature"),
     "B_Tdpl1": ("Flue Gas Temperature", "temperature", None, False, "flue_gas_temperature"),
     "B_Tpov1": ("Return Flow Temperature", "temperature", None, False, "return_flow_temperature"),
     "B_Tva1": ("Outside Temperature", "temperature", None, False, "outside_temperature"),
     "B_Ths1": ("Hydraulic Crossover Temperature", "temperature", None, True, "hydraulic_crossover_temperature"),
-    "K1B_Tpol1": ("K1 Circuit Flow Measured Temperature", "temperature", None, False, "circuit_1k_flow_measured_temperature"),
-    "K1B_Tpol": ("K1 Circuit Flow Target Temperature", "setpoint", None, False, "circuit_1k_flow_target_temperature"),
-    "K1B_Tsob": ("K1 Circuit Room Target Temperature", "setpoint", None, False, "circuit_1k_room_target_temperature"),
-    "K1B_Tsob1": ("K1 Circuit Room Measured Temperature", "temperature", None, True, "circuit_1k_room_measured_temperature"),
+    "K1B_Tpol1": ("DHW Temperature", "temperature", None, False, "circuit_1k_flow_measured_temperature"),
+    "K1B_Tpol": ("DHW Target Temperature", "setpoint", None, False, "circuit_1k_flow_target_temperature"),
     "B_STATE": ("Boiler State", "stage", STAGES, False, "boiler_state"),
     "B_start": ("Start / Stop Transition", "map", BURNER, False, "b_start"),
-    "B_CMD": ("Command Active", "map", OFF_ON, False, "command_active"),
     "B_fireS": ("Flame State", "map", OFF_ON, False, "firing_state"),
     "B_fan01": ("Fan", "map", OFF_ON, False, "fan_speed"),
     "B_doz": ("Pellet Feed", "map", OFF_ON, False, "b_doz"),
@@ -57,29 +53,20 @@ PARAMETERS = {
     "B_razina": ("Fuel Level State", "map", FUEL, False, "b_razina"),
     "B_specG": ("Status Mark", "map", MARK, False, "b_specg"),
     "B_Ppwm": ("PWM Pump", "map", OFF_ON, False, "pwm_pump"),
-    "B_zahPpwm": ("PWM Pump Demand", "map", OFF_ON, False, ROOM_PREFIX + "pwm_pump_active_unverified"),
-    "B_P1": ("P1 Pump (DHW)", "map", OFF_ON, False, "p1_pump"),
-    "B_P2": ("P2 Pump (DHW Recirculation)", "map", OFF_ON, False, "p2_pump"),
+    "B_zahPpwm": ("PWM Pump Demand", "map", OFF_ON, False, "pwm_pump_demand"),
+    "B_P2": ("P2 DHW Recirculation Pump", "map", OFF_ON, False, "p2_pump"),
     "B_P3": ("P3 Pump", "map", OFF_ON, False, "p3_pump"),
     "B_P4": ("P4 Pump", "map", OFF_ON, False, "p4_pump"),
-    "K1B_P": ("K1 Circuit Pump", "map", OFF_ON, False, "circuit_1k_pump"),
-    "K1B_zahP": ("K1 Circuit Pump Demand", "map", OFF_ON, False, "k1b_zahp"),
-    "K1B_onOff": ("K1 Circuit Enabled", "map", OFF_ON, False, "circuit_1k_pump_demand"),
-    "K1B_Prec": ("K1 Circuit Recirculation", "map", OFF_ON, True, "circuit_1k_recirculation"),
-    "K1B_dayNight": ("K1 Circuit Day Night Mode", "number", None, True, "circuit_1k_day_night_mode"),
-    "K1B_kor": ("K1 Circuit Room Target Correction", "number", None, True, "circuit_1k_room_correction"),
-    "K1B_korN": ("K1 Circuit Night Correction", "number", None, True, "circuit_1k_night_correction"),
-    "K1B_korType": ("K1 Circuit Correction Type", "number", None, True, "circuit_1k_correction_type"),
-    "K1B_CircType": ("K1 Circuit Heating Type", "number", None, True, "circuit_1k_heating_type"),
+    "K1B_P": ("P1 DHW Pump", "map", OFF_ON, False, "circuit_1k_pump"),
+    "K1B_zahP": ("DHW Pump Demand", "map", OFF_ON, False, "k1b_zahp"),
+    "K1B_CircType": ("DHW Circuit Type", "raw", None, True, "circuit_1k_heating_type"),
     "B_Paku": ("Accumulator Pump", "map", OFF_ON, False, "accumulator_pump"),
     "B_zahPa": ("Accumulator Pump Demand", "map", OFF_ON, False, "accumulator_pump_demand"),
-    "B_Pk1_k2": ("K1/K2 Pump", "map", OFF_ON, True, "k1_k2_pump"),
-    "B_zahK1_K2": ("K1/K2 Pump Demand", "map", OFF_ON, True, "k1_k2_pump_demand"),
     "B_Valve": ("Valve State", "map", OFF_ON, True, "valve_state"),
     "B_zahValve": ("Valve Demand", "map", OFF_ON, True, "valve_demand"),
     "B_PTV/GRI": ("DHW / Heating Valve", "number", None, True, "dhw_heating_valve"),
     "B_PTV/GRI_SEL": ("DHW / Heating Valve Select", "number", None, True, "dhw_heating_valve_select"),
-    "B_PTV_PRI": ("DHW Priority", "map", OFF_ON, True, ROOM_PREFIX + "dhw_heater_priority_unverified"),
+    "B_PTV_PRI": ("DHW Priority", "map", OFF_ON, True, "dhw_priority"),
     "B_VAC_TUR": ("Vacuum Turbine", "map", OFF_ON, True, "vacuum_turbine"),
     "B_VAC_STS": ("Vacuum Status", "number", None, True, "vacuum_status"),
     "B_ODRTMP": ("Boiler Temperature Maintenance", "number", None, True, "boiler_temperature_maintenance"),
@@ -120,7 +107,7 @@ PARAMETERS = {
     "B_Out1": ("Auxiliary Output 1", "raw", None, True, "b_out1"),
     "B_REC": ("DHW Recirculation Active", "map", OFF_ON, True, "b_rec"),
     "B_REO": ("DHW Recirculation Pump", "map", OFF_ON, True, "b_reo"),
-    "B_Tptv1": ("DHW Temperature", "temperature", None, True, "b_tptv1"),
+    "B_Tptv1": ("Secondary DHW Temperature", "temperature", None, True, "b_tptv1"),
     "B_ashC": ("Ash Screw Active", "raw", None, True, "b_ashc"),
     "B_ashSc": ("Ash Cleaner", "raw", None, True, "b_ashsc"),
     "B_bim": ("Bimetal Overheat Sensor", "map", OFF_ON, True, "b_bim"),
@@ -137,7 +124,18 @@ PARAMETERS = {
     "B_vanjS": ("Outdoor Sensor Connected", "raw", None, True, "b_vanjs"),
     "B_zlj": ("Log", "raw", None, True, "b_zlj"),
 }
-NOT_ENTITIES = {"PING", "CMD", "wf_req"}
+NOT_ENTITIES = {
+    "PING", "CMD", "wf_req",
+    # The same signal under another name, checked on a night of real data: one entity is enough.
+    "B_P1", "B_Pk1_k2",  # K1B_P: 6 of 6 changes at the same moment; on scheme 43 this is pump P1
+    "B_zahK1_K2",  # K1B_zahP
+    "B_Tkm1",  # K1B_Tpol1 rounded to whole degrees: the same DHW sensor
+    "B_CMD",  # the state of the boiler switch
+    "K1B_onOff",  # the state of the K1 switch
+    "K1B_Prec",  # recirculation is pump P2
+    # On scheme 43 K1 loads the DHW tank, and there is no room thermostat.
+    "K1B_Tsob", "K1B_Tsob1", "K1B_dayNight", "K1B_kor", "K1B_korN", "K1B_korType",
+}
 TABLE_RE = re.compile(r"^(PVAL|PDEF|PMIN|PMAX)_")
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")
 PUMP_RE = re.compile(r"^B_P(\d+)$")
@@ -155,8 +153,8 @@ SETTINGS = {
     68: ("Buffer tank temperature differential", 1, "buffer_tank_temperature_differential", 10),
     70: ("Minimal buffer tank temperature", 1, "minimal_buffer_tank_temperature", 20),
     71: ("Stop buffer tank temperature", 1, "stop_buffer_tank_temperature", 5),
-    291: ("DHW temperature (K1 circuit)", 0.1, "dhw_temperature_k1_circuit", 50),
-    292: ("DHW difference (K1 circuit)", 0.1, "dhw_difference_k1_circuit", 5),
+    291: ("DHW temperature", 0.1, "dhw_temperature_k1_circuit", 50),
+    292: ("DHW difference", 0.1, "dhw_difference_k1_circuit", 5),
     576: ("Boiler difference", 1, "boiler_difference", 5),
 }
 LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
@@ -274,6 +272,11 @@ def extra_attributes(key, values):
     elif key in ("B_PTV_PRI", "B_signal"):
         attributes["Raw value"] = raw
     return attributes
+
+
+def enabled_by_default(key):
+    """Meaning unknown or nothing connected to it: the entity exists, but stays off until someone wants it."""
+    return key != "B_Ths1" and parameter_info(key)[1] != "raw"
 
 
 def is_fresh(age):
