@@ -36,6 +36,7 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          ignore: description topics # set on the GitHub page; needed only for the default HACS list, where no ignore is allowed
 
   image-starts:
     runs-on: ubuntu-latest
