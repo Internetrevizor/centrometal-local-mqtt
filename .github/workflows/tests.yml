@@ -36,7 +36,7 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          ignore: brands
+          ignore: brands description topics # settings of the GitHub repository, not of this code
 
   image-starts:
     runs-on: ubuntu-latest
