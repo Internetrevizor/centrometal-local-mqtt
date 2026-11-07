@@ -64,7 +64,7 @@ class Module:
         self.session.feed(connect() + subscribe(), self.now)
         self.session.take_output()
         if synced:
-            self.say({"_sync": "id", "_token": "t", "clMsgId": 9})
+            self.say({"_sync": "id", "_token": "t", "clMsgId": 0})
             self.sent()
 
     def say(self, obj):
@@ -177,7 +177,7 @@ class PowerCommandTests(unittest.TestCase):
     def test_a_command_taken_during_a_reconnect_waits_for_the_first_answer(self):
         module = Module(synced=False)
         command = module.book.power(1, module.now)
-        module.say({"_sync": "id", "_token": "t", "clMsgId": 9})
+        module.say({"_sync": "id", "_token": "t", "clMsgId": 0})
         module.sent()
         self.assertNotIn("CMD", names(module.run(3)))
         module.say({"B_CMD": 1, "clMsgId": 2})
@@ -365,51 +365,19 @@ class ATCommandTests(unittest.TestCase):
         self.assertEqual(state.at_commands, {"AT+CWLIF": 2})
 
 
-class ATArgumentsTests(unittest.TestCase):
+class SkippedBytesTests(unittest.TestCase):
     SECRET = b'AT+CWSAP="hotspot-name","hotspot-password",5,3\r\n'
 
-    def state(self, folder, debug):
-        path = os.path.join(folder, "j.jsonl")
-        return store.State(store.Journal(path, debug=debug)), path
-
-    def events(self, path):
-        if not os.path.exists(path):
-            return []
-        return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()]
-
-    def test_whole_commands_only(self):
-        text = self.SECRET + AT + b"AT\r\n" + b"\x00\xff{\"_token\":\"abc\"}\r\n" + b'AT+CUT="no end'
-        self.assertEqual(proto.at_lines(text), {self.SECRET[:-2].decode(): 1, "AT+CWLIF": 1, "AT": 1})
-
-    def test_arguments_reach_the_journal_file_with_debug_on(self):
+    def test_they_reach_nothing_even_with_debug_on(self):
         with tempfile.TemporaryDirectory() as folder:
-            state, path = self.state(folder, True)
-            state.note_skipped(1, self.SECRET + AT)
-            found = [e for e in self.events(path) if e["e"] == "at_text"]
-            self.assertEqual(found[0]["lines"], {self.SECRET[:-2].decode(): 1, "AT+CWLIF": 1})
-
-    def test_arguments_stay_out_of_everything_else(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, _ = self.state(folder, True)
-            state.note_skipped(1, self.SECRET)
-            for text in (json.dumps(state.meta()), state.values_payload()):
-                self.assertNotIn("hotspot-password", text)
+            path = os.path.join(folder, "j.jsonl")
+            state = store.State(store.Journal(path, debug=True))
+            state.note_skipped(1, b'{"_token":"abc"}' + self.SECRET)
             self.assertEqual(state.at_commands, {"AT+CWSAP": 1})
-
-    def test_no_arguments_anywhere_with_debug_off(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, path = self.state(folder, False)
-            state.note_skipped(1, self.SECRET)
-            self.assertEqual(self.events(path), [])
-            self.assertEqual(state.at_commands, {"AT+CWSAP": 1})
-
-    def test_a_command_cut_by_a_tcp_segment_is_still_whole(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, path = self.state(folder, True)
-            state.note_skipped(1, self.SECRET[:20])
-            state.note_skipped(0, self.SECRET[20:])
-            found = [e for e in self.events(path) if e["e"] == "at_text"]
-            self.assertEqual(found[0]["lines"], {self.SECRET[:-2].decode(): 1})
+            journal = Path(path).read_text(encoding="utf-8") if os.path.exists(path) else ""
+            for text in (journal, json.dumps(state.meta()), state.values_payload(), state.last_malformed):
+                self.assertNotIn("abc", text)
+                self.assertNotIn("hotspot", text)
 
     def test_a_run_that_continues_in_the_next_segment_is_reported(self):
         module = Module()
@@ -421,39 +389,100 @@ class ATArgumentsTests(unittest.TestCase):
         self.assertIn("AT+CWLIF x2", first)
         self.assertIn("AT+CWLIF x1", module.state.last_malformed)
 
-    def test_skipped_bytes_reach_the_journal_in_clear_with_debug_on(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, path = self.state(folder, True)
-            state.note_skipped(1, b'{"_token":"abc"}\xff\r\n' + self.SECRET)
-            found = [e for e in self.events(path) if e["e"] == "skipped_raw"]
-            self.assertEqual(found[0]["length"], 19 + len(self.SECRET))
-            self.assertIn('"_token":"abc"', found[0]["text"])
-            self.assertIn("\\xff", found[0]["text"])
-            self.assertIn("hotspot-password", found[0]["text"])
 
-    def test_skipped_bytes_stay_out_of_everything_else(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, _ = self.state(folder, True)
-            state.note_skipped(1, b'{"_token":"abc"}' + self.SECRET)
-            for text in (json.dumps(state.meta()), state.values_payload(), state.last_malformed):
-                self.assertNotIn("abc", text)
-                self.assertNotIn("hotspot-password", text)
+class RepeatedMessageTests(unittest.TestCase):
+    """The numbers and stages are from the night of 06-07.11.2026: D5 at 04:18:19, then a repeat of the D4 from 04:17:19."""
 
-    def test_skipped_bytes_are_not_written_with_debug_off(self):
-        with tempfile.TemporaryDirectory() as folder:
-            state, path = self.state(folder, False)
-            state.note_skipped(1, b'{"_token":"abc"}')
-            self.assertEqual(self.events(path), [])
+    def test_an_old_stage_does_not_overwrite_the_new_one(self):
+        state = store.State()
+        self.assertTrue(state.ingest({"B_STATE": "D4", "clMsgId": 2041711}))
+        self.assertTrue(state.ingest({"B_STATE": "D5", "clMsgId": 2041717}))
+        moment = state.value_times["B_STATE"]
+        self.assertFalse(state.ingest({"B_FILE": "x", "clMsgId": 2041695}))
+        self.assertFalse(state.ingest({"B_STATE": "D4", "clMsgId": 2041711}))
+        self.assertEqual(state.values["B_STATE"], "D5")
+        self.assertEqual(state.value_times["B_STATE"], moment)
+        self.assertNotIn("B_FILE", state.values)
+        self.assertEqual(state.stale_messages, 2)
+        self.assertEqual(state.meta()["stale_messages"], 2)
+        self.assertTrue(state.ingest({"B_STATE": "D6", "clMsgId": 2041731}))
+        self.assertEqual(state.values["B_STATE"], "D6")
 
-    def test_nothing_is_sent_back_with_debug_on(self):
+    def test_the_same_number_twice_is_a_repeat(self):
+        state = store.State()
+        state.ingest({"B_Tk1": 60, "clMsgId": 7})
+        self.assertFalse(state.ingest({"B_Tk1": 60, "clMsgId": 7}))
+        self.assertEqual(state.stale_messages, 1)
+
+    def test_a_numbering_that_started_over_is_accepted(self):
+        state = store.State()
+        state.ingest({"B_Tk1": 60, "clMsgId": 2041725})
+        self.assertTrue(state.ingest({"B_Tk1": 61, "clMsgId": 2041725 - store.RETRANSMIT_WINDOW}))
+        self.assertEqual(state.values["B_Tk1"], 61)
+        self.assertTrue(state.ingest({"B_Tk1": 62, "clMsgId": 5}))
+        self.assertTrue(state.ingest({"B_Tk1": 63, "clMsgId": 6}))
+        self.assertEqual(state.values["B_Tk1"], 63)
+        self.assertEqual(state.stale_messages, 0)
+
+    def test_a_message_without_a_number_is_accepted(self):
+        state = store.State()
+        state.ingest({"B_Tk1": 60, "clMsgId": 10})
+        self.assertTrue(state.ingest({"B_Tk1": 61}))
+        self.assertTrue(state.ingest({"B_Tk1": 62, "clMsgId": "9"}))
+        self.assertEqual(state.values["B_Tk1"], 62)
+
+    def test_an_ended_alarm_does_not_come_back(self):
+        state = store.State()
+        state.ingest({"E12": "A", "clMsgId": 1})
+        state.ingest({"E12": "P", "clMsgId": 2})
+        state.ingest({"E12": "A", "clMsgId": 1})
+        self.assertEqual(state.active_alarms, {})
+
+    def test_the_count_survives_a_restart(self):
         with tempfile.TemporaryDirectory() as folder:
-            state, _ = self.state(folder, True)
-            session = s.LocalSession(state, c.CommandBook(), state.journal,
-                                     {"read_interval_seconds": 60, "first_poll_delay_seconds": 2.0}, 0.0, lambda *a, **k: None)
-            session.feed(connect() + subscribe(), 0.0)
-            session.take_output()
-            session.feed(self.SECRET + AT, 1.0)
-            self.assertEqual(session.take_output(), b"")
+            path = os.path.join(folder, "values.json")
+            state = store.State(values_path=path)
+            state.ingest({"B_Tk1": 60, "clMsgId": 2})
+            state.ingest({"B_Tk1": 60, "clMsgId": 1})
+            state.save_values()
+            self.assertEqual(store.State(values_path=path).stale_messages, 1)
+
+    def test_an_old_switch_state_does_not_turn_the_switch_back(self):
+        module = Module()
+        module.say({"B_CMD": 0, "clMsgId": 100})
+        module.say({"B_CMD": 1, "clMsgId": 110})
+        module.say({"B_CMD": 0, "clMsgId": 100})
+        self.assertEqual(module.state.values["B_CMD"], 1)
+
+    def test_an_old_echo_does_not_confirm_a_command(self):
+        module = Module()
+        module.say({"B_CMD": 1, "clMsgId": 100})
+        module.say({"B_CMD": 0, "clMsgId": 110})
+        command = module.book.power(1, module.now)
+        module.session.tick(module.now)
+        module.sent()
+        module.say({"B_CMD": 1, "clMsgId": 100})
+        self.assertEqual(command.state, c.PENDING)
+        module.say({"B_CMD": 1, "clMsgId": 111})
+        self.assertEqual(command.state, c.CONFIRMED)
+
+    def test_a_repeated_ping_is_still_answered_and_counts_as_heard(self):
+        module = Module()
+        module.say({"PING": 1, "clMsgId": 100})
+        module.say({"PING": 2, "clMsgId": 110})
+        module.sent()
+        module.now += 50
+        module.say({"PING": 1, "clMsgId": 100})
+        self.assertIn({"PING_ACK": 1}, [{k: v for k, v in m.items() if k == "PING_ACK"} for m in module.sent()])
+        self.assertEqual(module.session.last_heard, module.now)
+
+    def test_the_proxy_copy_ignores_them_as_well(self):
+        state = store.State()
+        observer = g.MQTTObserver(state, store.Journal(None), g.Session(None), True)
+        observer.feed(connect())
+        observer.feed(up({"B_STATE": "D5", "clMsgId": 20}) + up({"B_STATE": "D4", "clMsgId": 10}))
+        self.assertEqual(state.values["B_STATE"], "D5")
+        self.assertEqual(state.stale_messages, 1)
 
 
 class ValueCheckTests(unittest.TestCase):

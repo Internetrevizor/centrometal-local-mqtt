@@ -120,8 +120,8 @@ class LocalSession:
             return
         self.last_heard = now
         self.journal.message("up", valid=True, msg=redact(message))
-        self.state.ingest(message)
-        self.book.observe(message, now)
+        if self.state.ingest(message):
+            self.book.observe(message, now)
         if "_sync" in message and self.subscribed and self.topic_server:
             client_id = message.get("clMsgId")
             token = message.get("_token")
