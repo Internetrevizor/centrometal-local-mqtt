@@ -10,7 +10,7 @@ import json
 from typing import Any, Callable
 
 from commands import Command, CommandBook
-from parameters import LIMITS, setting_key
+from parameters import READ_SLOTS, setting_key
 from protocol import ACK_RE, ModuleFrames, frame, get_publish, pub_frame, read_connect_fields, redact, sign_obj, signing_key, subscribe_packet, unpack_utf8, verify_payload
 from store import Journal, State
 
@@ -183,7 +183,7 @@ class LocalSession:
                 self.next_counters = now + COUNTERS_READ_SECONDS
             self.next_refresh = now + self.read_interval
         if self.next_settings is not None and now >= self.next_settings:
-            self.pending_reads.extend(slot for slot in LIMITS if slot not in self.pending_reads)
+            self.pending_reads.extend(slot for slot in READ_SLOTS if slot not in self.pending_reads)
             self.next_settings = now + SETTINGS_READ_SECONDS
         if self.pending_reads and now >= self.next_read:
             self._publish({f"PRD {self.pending_reads.pop(0)}": "VAL"})
