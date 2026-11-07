@@ -1,6 +1,5 @@
 """The DHW / heating mode of the boiler (controller manual 5.1), written to slot 4 and read back from it."""
 from homeassistant.components.select import SelectEntity
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .parameters import DHW_HEATING_MODES, DHW_MODE_ENTITY_ID, DHW_MODE_SLOT, commands_available, setting_value
@@ -16,7 +15,6 @@ class DhwHeatingMode(CoordinatorEntity, SelectEntity):
     _attr_has_entity_name = True
     _attr_name = "DHW / Heating Mode Setting"
     _attr_icon = "mdi:water-boiler"
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(DHW_HEATING_MODES.values())
 
     def __init__(self, coordinator, entry_id):

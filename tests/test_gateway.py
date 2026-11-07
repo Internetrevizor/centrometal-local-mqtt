@@ -643,7 +643,7 @@ class SettingTests(CommandTests):
         await self.handshake(port)
         for body in (b'{"slot":67,"value":86}', b'{"slot":67,"value":39}', b'{"slot":1,"value":50}', b'{"slot":67,"value":"66"}',
                      b'{"slot":67,"value":true}', b'{"slot":"67","value":66}', b'{}',
-                     b'{"slot":71,"value":9}', b'{"slot":291,"value":50.3}', b'{"slot":292,"value":5.5}', b'{"slot":67,"value":66.5}'):
+                     b'{"slot":71,"value":31}', b'{"slot":291,"value":50.3}', b'{"slot":292,"value":5.5}', b'{"slot":67,"value":66.5}'):
             self.assertFalse(b"200 OK" in await self.api(gateway, self.post_setting(body)), body)
 
     async def test_mode_and_priority_take_only_their_values(self):

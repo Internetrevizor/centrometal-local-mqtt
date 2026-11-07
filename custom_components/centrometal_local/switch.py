@@ -3,7 +3,6 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .parameters import (DHW_PRIORITY_ENTITY_ID, DHW_PRIORITY_SLOT, K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID,
@@ -111,7 +110,6 @@ class DhwPriority(CoordinatorEntity, SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "DHW Priority Setting"
     _attr_icon = "mdi:priority-high"
-    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
