@@ -504,7 +504,13 @@ class ValueCheckTests(unittest.TestCase):
         self.assertEqual(p.display_value("PVAL_71_0", 9), 9.0)
 
     def test_steps_of_the_boiler_panel(self):
-        self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 291, 292, 576, p.K1_SWITCH_SLOT)], [1, 1, 1, 0.5, 1, 1, 1])
+        self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 291, 292, 576, p.K1_SWITCH_SLOT)], [1] * 7)
+
+    def test_dhw_heating_mode_has_names(self):
+        self.assertEqual([p.display_value("B_PTV/GRI_SEL", v) for v in (0, 1, 2, 3)],
+                         ["DHW + heating", "DHW only", "Heating only", "Auto"])
+        self.assertEqual(p.display_value("B_PTV/GRI", 0), "DHW + heating")
+        self.assertEqual(p.display_value("B_PTV/GRI_SEL", 7), "7")
 
     def test_one_list_of_limits_for_the_app_and_the_integration(self):
         self.assertIs(g.SETTINGS, p.LIMITS)

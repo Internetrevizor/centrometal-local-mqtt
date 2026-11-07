@@ -25,6 +25,8 @@ FUEL = {0: "Empty", 1: "Reserve", 2: "Full"}
 MARK = {0: "None", 1: "R", 2: "B", 3: "T", 4: "G", 5: "F"}
 MARK_DETAILS = {0: ('No special shutdown activity', 'None', False, 'PelTec II Lambda controller manual'), 1: ('Shutdown after loss of flame during operation', 'Temporary shutdown reason', True, 'PelTec II Lambda controller manual'), 2: ('Shutdown after excessive pellet feed tube bimetal temperature', 'Temporary shutdown reason', True, 'PelTec II Lambda controller manual'), 3: ('Shutdown so the turbulator / flue passage cleaner can operate', 'Temporary shutdown reason', True, 'PelTec II Lambda controller manual'), 4: ('Shutdown because burner grate cleaning is required', 'Temporary shutdown reason', True, 'PelTec II Lambda controller manual'), 5: ('Shutdown associated with pellet tank filling or refilling', 'Temporary shutdown reason', True, 'Related official Centrometal controller manual')}
 SUPERVISION = {0: "Off", 1: "Supervision", 2: "Supervision + control"}
+# Controller manual 5.1, in the order of the panel; the owner went through all four on 07.11.2026 and saw 0, 1, 2, 3.
+DHW_HEATING_MODES = {0: "DHW + heating", 1: "DHW only", 2: "Heating only", 3: "Auto"}
 SCHEMES = {42: "43. BUF + K1 DHW"}
 SCHEME_ATTRIBUTES = {42: {"Buffer tank": "CAS", "DHW tank": "pump", "DHW recirculation": True, "P1": "DHW Pump (K1)",
                           "P2": "DHW Recirculation Pump (K1)", "P3": "P3 Pump", "P4": "P4 Pump"}}
@@ -64,8 +66,8 @@ PARAMETERS = {
     "B_zahPa": ("Accumulator Pump Demand", "map", OFF_ON, False, "accumulator_pump_demand"),
     "B_Valve": ("Valve State", "map", OFF_ON, True, "valve_state"),
     "B_zahValve": ("Valve Demand", "map", OFF_ON, True, "valve_demand"),
-    "B_PTV/GRI": ("DHW / Heating Valve", "number", None, True, "dhw_heating_valve"),
-    "B_PTV/GRI_SEL": ("DHW / Heating Valve Select", "number", None, True, "dhw_heating_valve_select"),
+    "B_PTV/GRI": ("DHW / Heating Mode", "map", DHW_HEATING_MODES, False, "dhw_heating_valve"),  # the mode in use; Auto is one of the first three
+    "B_PTV/GRI_SEL": ("DHW / Heating Mode Selected", "map", DHW_HEATING_MODES, False, "dhw_heating_valve_select"),
     "B_PTV_PRI": ("DHW Priority", "map", OFF_ON, True, "dhw_priority"),
     "B_VAC_TUR": ("Vacuum Turbine", "map", OFF_ON, True, "vacuum_turbine"),
     "B_VAC_STS": ("Vacuum Status", "number", None, True, "vacuum_status"),
@@ -154,7 +156,7 @@ SETTINGS = {
     67: ("Buffer tank temperature", 1, "buffer_tank_temperature", 80),
     68: ("Buffer tank temperature differential", 1, "buffer_tank_temperature_differential", 10),
     70: ("Minimal buffer tank temperature", 1, "minimal_buffer_tank_temperature", 20),
-    291: ("DHW temperature", 0.5, "dhw_temperature_k1_circuit", 50),
+    291: ("DHW temperature", 1, "dhw_temperature_k1_circuit", 50),
     292: ("DHW difference", 1, "dhw_difference_k1_circuit", 5),
     576: ("Boiler difference", 1, "boiler_difference", 5),
 }
@@ -163,6 +165,7 @@ SETTINGS = {
 LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
 # Read and shown, never written. 71 (stop buffer tank temperature) is set by the controller itself on scheme 43: the panel
 # does not let it be changed (checked by the owner, 07.11.2026), although the manual lists it as a setting, 3 to 30.
+# Seen the same day: buffer tank temperature 67 -> 80 -> 67 on the panel, and 71 followed about 12 s later, 9 -> 5 -> 9.
 READ_ONLY_SLOTS = (71,)
 READ_SLOTS = (*LIMITS, *READ_ONLY_SLOTS)
 MAX_AGE_SECONDS = 480
@@ -194,7 +197,7 @@ def is_entity(key):
 
 
 def setting_step(slot):
-    """The step of the boiler panel: 0.5 for the DHW temperature, 1 for everything else (checked by the owner, 07.11.2026)."""
+    """The step of the boiler panel: 1 for every setting (checked by the owner, 07.11.2026)."""
     return SETTINGS[slot][1] if slot in SETTINGS else 1
 
 

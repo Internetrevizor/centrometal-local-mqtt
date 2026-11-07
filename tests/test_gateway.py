@@ -646,10 +646,11 @@ class SettingTests(CommandTests):
                      b'{"slot":71,"value":9}', b'{"slot":291,"value":50.3}', b'{"slot":292,"value":5.5}', b'{"slot":67,"value":66.5}'):
             self.assertFalse(b"200 OK" in await self.api(gateway, self.post_setting(body)), body)
 
-    async def test_dhw_temperature_takes_half_degrees(self):
+    async def test_dhw_temperature_takes_whole_degrees(self):
         gateway, port = await self.start(first_poll_delay_seconds=60)
         await self.handshake(port)
-        self.assertIn(b"200 OK", await self.api(gateway, self.post_setting(b'{"slot":291,"value":50.5}')))
+        self.assertIn(b"200 OK", await self.api(gateway, self.post_setting(b'{"slot":291,"value":51}')))
+        self.assertFalse(b"200 OK" in await self.api(gateway, self.post_setting(b'{"slot":291,"value":50.5}')))
 
     async def test_k1_circuit_is_written_as_0_or_1(self):
         gateway, port = await self.start(first_poll_delay_seconds=60)
