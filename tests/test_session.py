@@ -129,7 +129,7 @@ class SupervisionTests(unittest.TestCase):
             seen.update(names(module.run(10)))
             module.say({"PING": 1, "clMsgId": 5})
             seen.update(names(module.sent()))
-        allowed = {"REFRESH", "RSTAT", "PING_ACK"} | {f"PRD {slot}" for slot in p.LIMITS}
+        allowed = {"REFRESH", "RSTAT", "PING_ACK"} | {f"PRD {slot}" for slot in p.READ_SLOTS}
         self.assertLessEqual(seen, allowed)
 
 
@@ -492,6 +492,19 @@ class ValueCheckTests(unittest.TestCase):
         self.assertEqual(state.rejected_values, 1)
         self.assertNotIn("B_Tak1_1", state.values)
         self.assertEqual((state.values["B_Tk1"], state.values["B_STATE"], state.values["SE00"]), ("61.5", "D3", "whatever"))
+
+    def test_the_stop_buffer_tank_temperature_is_only_read(self):
+        self.assertNotIn(71, p.LIMITS)
+        self.assertNotIn(71, p.SETTINGS)
+        self.assertIn(71, p.READ_SLOTS)
+        self.assertTrue(p.is_entity("PVAL_71_0"))
+        self.assertFalse(p.is_entity("PVAL_67_0"))
+        name, _, _, _, entity_id = p.parameter_info("PVAL_71_0")
+        self.assertEqual((name, entity_id), ("Stop buffer tank temperature", "sensor.peltec_ii_lambda_stop_buffer_tank_temperature"))
+        self.assertEqual(p.display_value("PVAL_71_0", 9), 9.0)
+
+    def test_steps_of_the_boiler_panel(self):
+        self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 291, 292, 576, p.K1_SWITCH_SLOT)], [1, 1, 1, 0.5, 1, 1, 1])
 
     def test_one_list_of_limits_for_the_app_and_the_integration(self):
         self.assertIs(g.SETTINGS, p.LIMITS)

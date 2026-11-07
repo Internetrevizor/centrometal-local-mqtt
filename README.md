@@ -52,7 +52,7 @@ Every parameter the boiler sends becomes a sensor, with English names and the sa
 
 - `switch.peltec_ii_lambda_boiler_switch`: boiler on/off (tested).
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
-- `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
+- `switch.k1_heating_circuit_off_on` and six `number` settings: written with `PWR`, on the step of the boiler panel (0.5 °C for the DHW temperature, 1 for the rest). The stop buffer tank temperature is only read, as `sensor.peltec_ii_lambda_stop_buffer_tank_temperature`: on scheme 43 the controller sets it itself. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
 - `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
 - `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. Alarms are read only: nothing here can end one. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
 - `sensor.peltec_ii_lambda_sessions_closed`, `_malformed_frames`, `_commands_expired`: counters that survive restarts and stay in the long-term history. `Gateway State` also shows `close_reasons`, and the integration offers Download diagnostics, without the token.

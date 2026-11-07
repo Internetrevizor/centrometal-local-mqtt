@@ -32,7 +32,7 @@ from http import HTTPStatus
 from typing import Any
 
 from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
-from parameters import API_VERSION, LIMITS, setting_key
+from parameters import API_VERSION, LIMITS, READ_SLOTS, setting_key, setting_step
 from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
     MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
     varint, verify_payload,
@@ -270,11 +270,12 @@ class Gateway:
         return command
 
     def request_setting(self, slot: Any, value: Any) -> Command | None:
-        """PWR for one known slot, inside its limits."""
+        """PWR for one known slot, inside its limits and on the step of the boiler panel."""
         if type(slot) is not int or slot not in LIMITS or isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
         low, high = LIMITS[slot]
-        if not low <= value <= high or not self._may_accept():
+        steps = value / setting_step(slot)
+        if not low <= value <= high or abs(steps - round(steps)) > 1e-6 or not self._may_accept():
             return None
         value = int(value) if float(value).is_integer() else round(float(value), 1)
         key = setting_key(slot)
