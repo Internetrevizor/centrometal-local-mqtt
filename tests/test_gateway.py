@@ -898,6 +898,7 @@ def load_integration():
                                             "SensorStateClass": types.SimpleNamespace(MEASUREMENT="m", TOTAL_INCREASING="i")},
         "homeassistant.helpers": {"issue_registry": types.SimpleNamespace(**issue_registry), "entity_registry": types.SimpleNamespace()},
         "homeassistant.helpers.entity_registry": {},
+        "homeassistant.helpers.device_registry": {"DeviceInfo": dict},
         "homeassistant.helpers.entity": {"EntityCategory": types.SimpleNamespace(DIAGNOSTIC="d", CONFIG="c")},
         "homeassistant.helpers.aiohttp_client": {"async_get_clientsession": None},
         "homeassistant.helpers.issue_registry": issue_registry,

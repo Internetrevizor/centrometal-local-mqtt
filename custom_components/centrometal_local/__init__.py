@@ -153,7 +153,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         from homeassistant.util import slugify
 
         entities = er.async_get(hass)
-        device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+        # async_get_device(identifiers=...) is deprecated since 2026.8: identifiers are unique only within a config entry.
+        device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
         if device is not None:
             prefix = slugify(device.name_by_user or device.name or "")
             for item in er.async_entries_for_config_entry(entities, entry.entry_id):

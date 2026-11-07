@@ -1,6 +1,7 @@
 """A sensor for every parameter the boiler sends, created the first time it arrives."""
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import UnitOfTemperature
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -9,8 +10,8 @@ from .parameters import COUNTER_SENSORS, display_value, enabled_by_default, extr
 
 
 def device_info(entry_id):
-    return {"identifiers": {(DOMAIN, entry_id)}, "name": "PelTec II Lambda", "manufacturer": "Centrometal",
-            "model": "PelTec II Lambda", "sw_version": "Centrometal Local MQTT Protocol"}
+    return DeviceInfo(identifiers={(DOMAIN, entry_id)}, name="PelTec II Lambda", manufacturer="Centrometal",
+                      model="PelTec II Lambda", sw_version="Centrometal Local MQTT Protocol")
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
