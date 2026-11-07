@@ -145,6 +145,31 @@ class GatewayCoordinator(DataUpdateCoordinator):
         return None
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Up to 1.6.10 some entity_ids were copied from the cloud integration (technical_room_..., k1_...). Each one that
+    does not start with the device name takes the id Home Assistant gives a new entity: device name + entity name."""
+    if entry.version == 1 and entry.minor_version < 2:
+        from homeassistant.helpers import device_registry as dr, entity_registry as er
+        from homeassistant.util import slugify
+
+        entities = er.async_get(hass)
+        device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+        if device is not None:
+            prefix = slugify(device.name_by_user or device.name or "")
+            for item in er.async_entries_for_config_entry(entities, entry.entry_id):
+                domain, object_id = item.entity_id.split(".", 1)
+                name = item.original_name
+                if not prefix or not name or object_id.startswith(prefix + "_"):
+                    continue
+                target = f"{domain}.{prefix}_{slugify(name)}"
+                if entities.async_is_registered(target):
+                    continue
+                LOGGER.info("Renaming %s to %s", item.entity_id, target)
+                entities.async_update_entity(item.entity_id, new_entity_id=target)
+        hass.config_entries.async_update_entry(entry, minor_version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GatewayCoordinator(hass, entry)
     await coordinator.async_refresh()

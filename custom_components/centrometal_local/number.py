@@ -8,7 +8,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
+from .parameters import LIMITS, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
 from .sensor import device_info
 from .switch import _deliver
 
@@ -38,7 +38,6 @@ class PelTecSetting(CoordinatorEntity, NumberEntity):
         self._attr_native_min_value, self._attr_native_max_value = LIMITS[slot]
         self._attr_unique_id = f"{entry_id}_setting_{slot}"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = NUMBER_PREFIX + object_id
 
     @property
     def extra_state_attributes(self):

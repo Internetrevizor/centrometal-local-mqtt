@@ -2,7 +2,7 @@
 from homeassistant.components.select import SelectEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import DHW_HEATING_MODES, DHW_MODE_ENTITY_ID, DHW_MODE_SLOT, commands_available, setting_value
+from .parameters import DHW_HEATING_MODES, DHW_MODE_SLOT, commands_available, setting_value
 from .sensor import device_info
 from .switch import _deliver
 
@@ -21,7 +21,6 @@ class DhwHeatingMode(CoordinatorEntity, SelectEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_setting_{DHW_MODE_SLOT}"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = DHW_MODE_ENTITY_ID
 
     @property
     def current_option(self):

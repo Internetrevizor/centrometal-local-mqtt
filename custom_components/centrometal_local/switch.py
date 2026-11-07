@@ -5,7 +5,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import (DHW_PRIORITY_ENTITY_ID, DHW_PRIORITY_SLOT, K1_SWITCH_ENTITY_ID, K1_SWITCH_SLOT, SWITCH_ENTITY_ID,
+from .parameters import (DHW_PRIORITY_SLOT, K1_SWITCH_SLOT,
                          commands_available, number, setting_value)
 from .sensor import device_info
 
@@ -32,13 +32,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class PelTecCommand(CoordinatorEntity, SwitchEntity):
     _attr_has_entity_name = True
-    _attr_name = "Power Switch"
+    _attr_name = "Boiler Switch"
     _attr_icon = "mdi:fire"
 
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_command"
-        self.entity_id = SWITCH_ENTITY_ID
         self._attr_device_info = device_info(entry_id)
 
     @property
@@ -77,7 +76,6 @@ class K1Circuit(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_k1_circuit"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = K1_SWITCH_ENTITY_ID
 
     @property
     def available(self):
@@ -115,7 +113,6 @@ class DhwPriority(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_setting_{DHW_PRIORITY_SLOT}"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = DHW_PRIORITY_ENTITY_ID
 
     @property
     def available(self):
