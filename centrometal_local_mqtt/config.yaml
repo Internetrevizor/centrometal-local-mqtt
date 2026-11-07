@@ -1,5 +1,5 @@
 name: Centrometal Local MQTT Protocol
-version: 1.6.7
+version: 1.6.8
 image: ghcr.io/internetrevizor/centrometal-local-mqtt
 slug: centrometal_local_mqtt
 description: Runs your PelTec II Lambda without the Centrometal cloud, or next to it. A small local server for the boiler's WiFi module, for readings and on/off, even with no internet.

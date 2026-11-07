@@ -17,7 +17,7 @@ from .parameters import API_VERSION
 
 LOGGER = logging.getLogger(__name__)
 API_ISSUE = "app_version_mismatch"
-PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
+PLATFORMS = ["binary_sensor", "number", "select", "sensor", "switch"]
 APP_SILENCE_TOLERATED_SECONDS = 120  # an update of the app takes about a minute: entities stay as they are meanwhile
 STREAM_SILENCE_SECONDS = 90  # the app sends a heartbeat every 30 s
 STREAM_RETRY_SECONDS = 5
