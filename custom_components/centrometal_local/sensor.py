@@ -5,7 +5,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import COUNTER_SENSORS, GATEWAY_ENTITY_ID, HISTORY_ENTITY_ID, display_value, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
+from .parameters import COUNTER_SENSORS, display_value, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
 
 
 def device_info(entry_id):
@@ -41,7 +41,6 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_state"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = GATEWAY_ENTITY_ID
 
     @property
     def native_value(self):
@@ -69,7 +68,7 @@ class GatewayCounter(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry_id, key):
         super().__init__(coordinator)
         self.key = key
-        self._attr_name, self.entity_id = COUNTER_SENSORS[key]
+        self._attr_name = COUNTER_SENSORS[key][0]
         self._attr_unique_id = f"{entry_id}_counter_{key}"
         self._attr_device_info = device_info(entry_id)
 
@@ -89,7 +88,6 @@ class EventHistory(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_event_history"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = HISTORY_ENTITY_ID
 
     @property
     def native_value(self):
@@ -116,7 +114,6 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_{key}"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = entity_id
         self._attr_entity_registry_enabled_default = enabled_by_default(key)
         if diagnostic:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC

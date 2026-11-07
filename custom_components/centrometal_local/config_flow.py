@@ -6,6 +6,7 @@ from .const import DOMAIN
 
 class CentrometalLocalFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
+    MINOR_VERSION = 2  # 2: entity_ids follow the device name
 
     def __init__(self):
         self._discovered = None

@@ -106,12 +106,12 @@ async def test_entities_keep_their_ids_and_follow_the_stream(hass, app):
     assert entry.state is ConfigEntryState.LOADED
     await until(lambda: hass.states.get(UPPER) is not None and hass.states.get(UPPER).state == "55.0")
     assert hass.states.get(SWITCH).state == "off"
-    assert hass.states.get("switch.k1_heating_circuit_off_on").state == "on"
+    assert hass.states.get("switch.peltec_ii_lambda_dhw_circuit").state == "on"
     assert hass.states.get("sensor.peltec_ii_lambda_gateway_state").state == "local"
     assert hass.states.get("sensor.peltec_ii_lambda_gateway_state").attributes["at_commands"] == {}
     assert hass.states.get("sensor.peltec_ii_lambda_sessions_closed") is not None
     assert hass.states.get("button.peltec_ii_lambda_clear_alarms") is None
-    assert hass.states.get("binary_sensor.centrometal_boiler_system_connection").state == "on"
+    assert hass.states.get("binary_sensor.peltec_ii_lambda_system_connection").state == "on"
     app.gateway.state.ingest({"B_Tak1_1": 56, "clMsgId": 5})
     await until(lambda: hass.states.get(UPPER).state == "56.0")
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -153,7 +153,7 @@ async def test_an_unconfirmed_command_is_not_reported_as_failed_while_the_app_ke
 
 async def test_setting_the_held_value_writes_nothing(hass, app):
     entry = await add_entry(hass, app)
-    number = "number.technical_room_centrometal_peltec_ii_peltec_ii_lambda_buffer_tank_temperature"
+    number = "number.peltec_ii_lambda_buffer_tank_temperature"
     await until(lambda: hass.states.get(number) is not None and hass.states.get(number).state not in ("unknown", "unavailable"))
     assert float(hass.states.get(number).state) == 67
     await hass.services.async_call("number", "set_value", {"entity_id": number, "value": 67}, blocking=True)
@@ -163,7 +163,7 @@ async def test_setting_the_held_value_writes_nothing(hass, app):
 
 async def test_clicks_on_a_setting_send_only_the_last_value(hass, app):
     entry = await add_entry(hass, app)
-    number = "number.technical_room_centrometal_peltec_ii_peltec_ii_lambda_buffer_tank_temperature"
+    number = "number.peltec_ii_lambda_buffer_tank_temperature"
     await until(lambda: hass.states.get(number) is not None and hass.states.get(number).state not in ("unknown", "unavailable"))
     sent = []
     real = app.gateway.request_setting
@@ -190,6 +190,29 @@ async def test_the_sensor_left_by_1_6_9_is_removed(hass, app):
     await hass.async_block_till_done(wait_background_tasks=False)
     assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_PVAL_71_0") is None
     assert registry.async_get_entity_id("number", DOMAIN, f"{entry.entry_id}_setting_71") is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_install_of_1_6_10_is_aligned_once_with_the_device_name(hass, app):
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, version=1, minor_version=1,
+                            data={"host": "127.0.0.1", "port": app.api_port, "token": TOKEN})
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)},
+                                                     name="PelTec II Lambda")
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create("number", DOMAIN, f"{entry.entry_id}_setting_67", config_entry=entry, device_id=device.id,
+                                       suggested_object_id="technical_room_centrometal_peltec_ii_peltec_ii_lambda_buffer_tank_temperature",
+                                       original_name="Buffer tank temperature")
+    kept = registry.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_B_fan01", config_entry=entry, device_id=device.id,
+                                        suggested_object_id="peltec_ii_lambda_fan_speed", original_name="Fan")
+    other = registry.async_get_or_create("sensor", "other", "x", suggested_object_id="technical_room_other", original_name="Other")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=False)
+    assert registry.async_get(old.id).entity_id == "number.peltec_ii_lambda_buffer_tank_temperature"
+    assert registry.async_get(kept.id).entity_id == "sensor.peltec_ii_lambda_fan_speed"
+    assert registry.async_get(other.id).entity_id == "sensor.technical_room_other"
+    assert entry.minor_version == 2
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

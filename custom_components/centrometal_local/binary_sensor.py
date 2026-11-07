@@ -3,7 +3,6 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import ALARM_ENTITY_ID, CONNECTION_ENTITY_ID
 from .sensor import device_info
 
 
@@ -21,7 +20,6 @@ class ModuleConnection(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_connection"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = CONNECTION_ENTITY_ID
 
     @property
     def is_on(self):
@@ -39,7 +37,6 @@ class BoilerAlarm(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_alarm"
         self._attr_device_info = device_info(entry_id)
-        self.entity_id = ALARM_ENTITY_ID
 
     @property
     def is_on(self):

@@ -48,16 +48,15 @@ Each result is fired as the event `centrometal_local_command_result` and shown i
 
 ## What you get
 
-Every parameter the boiler sends becomes a sensor, with English names and the same entity_ids as the cloud integration [hass-centrometal-boiler](https://github.com/Internetrevizor/hass-centrometal-boiler), so existing automations and dashboards keep working after you remove it. Translate names in Home Assistant. A parameter not seen before gets a diagnostic sensor under its raw name.
+Every parameter the boiler sends becomes a sensor, with English names. Every entity_id starts with the device name, as Home Assistant builds it: `PelTec II Lambda` gives `sensor.peltec_ii_lambda_...`; rename the device and Home Assistant offers to rename the entities with it. An install made by 1.6.10 or older is aligned once on update: only entities of this integration whose id does not start with the device name are renamed (the settings, the mode and DHW priority, the DHW circuit, the event history and the system connection), and the log lists each one. Check automations and dashboards that use them. Translate names in Home Assistant. A parameter not seen before gets a diagnostic sensor under its raw name.
 
 - `switch.peltec_ii_lambda_boiler_switch`: boiler on/off (tested).
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
-- `switch.k1_heating_circuit_off_on` and seven `number` settings: written with `PWR`, in steps of 1, as on the boiler panel. A value typed or clicked into a box is written once it has stayed the same for 3 s, so clicking the arrows sends one write, not one per click. `select.technical_room_centrometal_peltec_ii_peltec_ii_lambda_dhw_heating_mode` (DHW + heating, DHW only, Heating only, Auto; slot 4) and `switch.technical_room_centrometal_peltec_ii_peltec_ii_lambda_dhw_priority` (slot 898) are written the same way. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
-- `binary_sensor.centrometal_boiler_system_connection`: on while data keeps arriving.
+- `switch.peltec_ii_lambda_dhw_circuit` and seven `number.peltec_ii_lambda_...` settings: written with `PWR`, in steps of 1, as on the boiler panel. A value typed or clicked into a box is written once it has stayed the same for 3 s, so clicking the arrows sends one write, not one per click. `select.peltec_ii_lambda_dhw_heating_mode_setting` (DHW + heating, DHW only, Heating only, Auto; slot 4) and `switch.peltec_ii_lambda_dhw_priority_setting` (slot 898) are written the same way. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
+- `binary_sensor.peltec_ii_lambda_system_connection`: on while data keeps arriving.
 - `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. Alarms are read only: nothing here can end one. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
 - `sensor.peltec_ii_lambda_sessions_closed`, `_malformed_frames`, `_commands_expired`: counters that survive restarts and stay in the long-term history. `Gateway State` also shows `close_reasons`, and the integration offers Download diagnostics, without the token.
 
-To keep the same entity_ids in `local` mode, remove the cloud integration before adding this one.
 
 ## Choose a mode
 
