@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from parameters import MAX_AGE_SECONDS, valid_raw
-from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, at_commands, at_lines, redact
+from protocol import ALARM_RE, COMMAND_RE, FIELD_RE, at_commands, redact
 
 LOG = logging.getLogger("peltec-gateway")
 ALARM_HISTORY = 50
@@ -23,7 +23,11 @@ JOURNAL_KEEP = 3
 VALUES_KEEP_SECONDS = 3600
 BURST_SECONDS = 0.3  # the module sends a dump in several messages: answer once, not once per message
 MAX_VALUES = 750  # settings tables can be large
-COUNTERS = ("sessions_closed", "malformed_frames", "invalid_messages", "rejected_values", "commands_expired", "identity_changes")
+COUNTERS = ("sessions_closed", "malformed_frames", "stale_messages", "invalid_messages", "rejected_values", "commands_expired",
+            "identity_changes")
+# After leaking AT text the module sends messages again, with the same clMsgId, up to 234 s later (night of 06-07.11.2026: 34
+# messages, at most 32 numbers behind the newest). Further back than this is not a repeat: the numbering has started over.
+RETRANSMIT_WINDOW = 200
 MAX_CLOSE_REASONS = 20
 MAX_AT_COMMANDS = 20
 
@@ -133,6 +137,8 @@ class State:
         self.verified_messages = 0
         self.invalid_messages = 0
         self.malformed_frames = 0
+        self.stale_messages = 0
+        self.last_client_id: int | None = None
         self.rejected_values = 0
         self.commands_expired = 0
         self.identity_changes = 0
@@ -147,7 +153,6 @@ class State:
         self.sessions_closed = 0
         self.close_reasons: dict[str, int] = {}
         self.at_commands: dict[str, int] = {}
-        self._at_tail = b""
         self.last_malformed = ""
         self.rejected_ip = ""
         self._load_values()
@@ -258,22 +263,7 @@ class State:
         for name, count in commands.items():
             if name in self.at_commands or len(self.at_commands) < MAX_AT_COMMANDS:
                 self.at_commands[name] = self.at_commands.get(name, 0) + count
-        self._journal_at_lines(skipped)
-        if self.journal and self.journal.debug:
-            # In clear, to learn what these bytes are: only with debug_journal, and only in that file.
-            self.journal.write("skipped_raw", length=len(skipped), text=skipped.decode("ascii", "backslashreplace"))
         return kind, commands
-
-    def _journal_at_lines(self, skipped: bytes) -> None:
-        """Only with debug_journal, and only in that file: not in the state, the API, the entities or the database."""
-        if not self.journal or not self.journal.debug:
-            return
-        text = self._at_tail + skipped
-        end = max(text.rfind(b"\r"), text.rfind(b"\n")) + 1
-        self._at_tail = text[end:][-240:]  # a command cut by the end of a TCP segment
-        lines = at_lines(text[:end])
-        if lines:
-            self.journal.write("at_text", lines=lines)
 
     def note_status_request(self) -> None:
         self.status_requests_sent += 1
@@ -287,8 +277,23 @@ class State:
             self.close_reasons[reason] = self.close_reasons.get(reason, 0) + 1
         self.mark_changed()
 
-    def ingest(self, signed: dict[str, Any]) -> None:
+    def _is_repeat(self, signed: dict[str, Any]) -> bool:
+        client_id = signed.get("clMsgId")
+        if type(client_id) is not int:
+            return False
+        if self.last_client_id is not None and 0 <= self.last_client_id - client_id < RETRANSMIT_WINDOW:
+            return True
+        self.last_client_id = client_id
+        return False
+
+    def ingest(self, signed: dict[str, Any]) -> bool:
+        """False for a message the module sent again: its values are old and would overwrite newer ones."""
         self.verified_messages += 1
+        if self._is_repeat(signed):
+            self.stale_messages += 1
+            if self.journal:
+                self.journal.message("stale_message", id=signed["clMsgId"])
+            return False
         for code, value in signed.items():
             if ALARM_RE.match(code):
                 self._note_alarm(code, value)
@@ -321,6 +326,7 @@ class State:
                         table.pop(key, None)
             self.last_update_unix = now
             self.mark_changed()
+        return True
 
     def note_downlink(self, message: dict[str, Any]) -> None:
         clean = redact(message)
@@ -362,6 +368,7 @@ class State:
             "close_reasons": dict(self.close_reasons),
             "data_fresh": self.is_fresh(),
             "malformed_frames": self.malformed_frames,
+            "stale_messages": self.stale_messages,
             "last_malformed": self.last_malformed,
             "at_commands": dict(self.at_commands),
             "alarms": dict(self.active_alarms),

@@ -1126,7 +1126,7 @@ class JournalModeTests(Base):
             path = os.path.join(folder, "j.jsonl")
             gateway, port = await self.start(g.Journal(path))
             reader, writer = await self.handshake(port)
-            writer.write(up({"B_Tak1_1": 60, "clMsgId": 1}) + up({"B_Tak1_1": 61, "clMsgId": 2}))
+            writer.write(up({"B_Tak1_1": 60, "clMsgId": 100}) + up({"B_Tak1_1": 61, "clMsgId": 101}))
             await writer.drain()
             await asyncio.sleep(.1)
             lines = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines()]

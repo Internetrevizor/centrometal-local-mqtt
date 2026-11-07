@@ -30,7 +30,7 @@ With the burner on, the module also sends the fast values by itself when they ch
 
 Nothing else can be sent. Settings can be written only for the known slots, within the limits of the controller.
 
-The app watches its own session. A module that connects but never completes the handshake (30 s), or that stays silent for 3 minutes while its TCP connection looks alive, is disconnected, and it reconnects within seconds. Text the boiler's controller leaks into the stream (`AT+CWLIF`) is skipped, counted and never answered. `Gateway State` shows the names of those commands in `at_commands` and `last_malformed`, without their arguments. The arguments go only to the journal file, with `debug_journal` on.
+The app watches its own session. A module that connects but never completes the handshake (30 s), or that stays silent for 3 minutes while its TCP connection looks alive, is disconnected, and it reconnects within seconds. Text the boiler's controller leaks into the stream (`AT+CWLIF`) is skipped, counted and never answered. `Gateway State` shows the names of those commands in `at_commands` and `last_malformed`, never their arguments or the skipped bytes. After leaking text the module may send older messages again, with the same `clMsgId`, up to a few minutes later. Their values would overwrite newer ones, so they are counted in `stale_messages` on `Gateway State` and ignored.
 
 ## Commands
 
@@ -125,7 +125,7 @@ The app updates from the app store and the integration from HACS, separately. Up
 | `connection_mode` | `local` or `cloud_proxy`, see above |
 | `upstream_host` | The portal's name, used only by `cloud_proxy` |
 | `read_interval_seconds` | Time between read requests, 10 to 240, default 60. One answer is about 1.3 kB. What matters during a burn arrives by itself |
-| `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without MQTT password, token or signature. It also writes the AT commands the controller leaks, with their arguments, as `at_text`, and every skipped byte in clear as `skipped_raw`: these can hold a WiFi network name and password, a token or the MQTT password, so turn it off and delete the files when you are done, and do not share them. Normally only new parameter names and session events are written |
+| `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without MQTT password, token or signature. Skipped bytes are never written. Normally only new parameter names and session events are written |
 
 ## Going back
 
