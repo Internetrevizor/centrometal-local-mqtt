@@ -179,6 +179,8 @@ LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), K1_SWITCH_SLOT: (0, 1), 291: (
 READ_ONLY_SLOTS = (71,)
 READ_SLOTS = (*LIMITS, *READ_ONLY_SLOTS)
 MAX_AGE_SECONDS = 480
+# Settings (PVAL_*) are read once an hour, or when they change on the panel: an hour old is still the current value.
+SETTING_MAX_AGE_SECONDS = 3600 + 900
 API_VERSION = 1  # the app and the integration update separately: this goes up when one stops understanding the other
 COUNTER_SENSORS = {
     "sessions_closed": ("Sessions Closed", SENSOR_PREFIX + "sessions_closed"),
@@ -338,5 +340,6 @@ def commands_available(status):
     return status.get("connection_mode") == "local" and bool(status.get("data_fresh"))
 
 
-def is_fresh(age):
-    return isinstance(age, (int, float)) and age < MAX_AGE_SECONDS
+def is_fresh(age, key=None):
+    limit = SETTING_MAX_AGE_SECONDS if key and TABLE_RE.match(key) else MAX_AGE_SECONDS
+    return isinstance(age, (int, float)) and age < limit

@@ -141,4 +141,4 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         d = self.coordinator.data or {}
-        return self.coordinator.last_update_success and is_fresh((d.get("value_age_seconds") or {}).get(self.key))
+        return self.coordinator.last_update_success and is_fresh((d.get("value_age_seconds") or {}).get(self.key), self.key)
