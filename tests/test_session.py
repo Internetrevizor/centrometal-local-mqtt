@@ -503,6 +503,13 @@ class ValueCheckTests(unittest.TestCase):
         self.assertEqual((name, entity_id), ("Stop buffer tank temperature", "sensor.peltec_ii_lambda_stop_buffer_tank_temperature"))
         self.assertEqual(p.display_value("PVAL_71_0", 9), 9.0)
 
+    def test_a_setting_read_an_hour_ago_is_still_current(self):
+        self.assertTrue(p.is_fresh(537, "PVAL_71_0"))
+        self.assertTrue(p.is_fresh(3700, "PVAL_71_0"))
+        self.assertFalse(p.is_fresh(5000, "PVAL_71_0"))
+        self.assertFalse(p.is_fresh(537, "B_Tak1_1"))
+        self.assertTrue(p.is_fresh(60))
+
     def test_steps_of_the_boiler_panel(self):
         self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 291, 292, 576, p.K1_SWITCH_SLOT)], [1] * 7)
 

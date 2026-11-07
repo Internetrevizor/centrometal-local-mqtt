@@ -893,9 +893,11 @@ def load_integration():
                                                     "BinarySensorEntity": Base},
         "homeassistant.components.number": {"NumberEntity": Base, "NumberMode": types.SimpleNamespace(BOX="box")},
         "homeassistant.components.switch": {"SwitchEntity": Base},
+        "homeassistant.components.select": {"SelectEntity": Base},
         "homeassistant.components.sensor": {"SensorDeviceClass": types.SimpleNamespace(TEMPERATURE="t"), "SensorEntity": Base,
                                             "SensorStateClass": types.SimpleNamespace(MEASUREMENT="m", TOTAL_INCREASING="i")},
-        "homeassistant.helpers": {"issue_registry": types.SimpleNamespace(**issue_registry)},
+        "homeassistant.helpers": {"issue_registry": types.SimpleNamespace(**issue_registry), "entity_registry": types.SimpleNamespace()},
+        "homeassistant.helpers.entity_registry": {},
         "homeassistant.helpers.entity": {"EntityCategory": types.SimpleNamespace(DIAGNOSTIC="d", CONFIG="c")},
         "homeassistant.helpers.aiohttp_client": {"async_get_clientsession": None},
         "homeassistant.helpers.issue_registry": issue_registry,
@@ -980,7 +982,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     def test_all_platforms_import(self):
         load_integration()
-        for name in ("sensor", "binary_sensor", "switch", "number", "diagnostics"):
+        for name in ("sensor", "binary_sensor", "switch", "number", "select", "diagnostics"):
             importlib.import_module(f"centrometal_local.{name}")
 
 

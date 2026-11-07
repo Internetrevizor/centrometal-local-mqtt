@@ -180,6 +180,18 @@ async def test_clicks_on_a_setting_send_only_the_last_value(hass, app):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_the_old_number_of_a_read_only_setting_is_removed(hass, app):
+    from homeassistant.helpers import entity_registry as er
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, data={"host": "127.0.0.1", "port": app.api_port, "token": TOKEN})
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create("number", DOMAIN, f"{entry.entry_id}_setting_71", config_entry=entry)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=False)
+    assert registry.async_get_entity_id("number", DOMAIN, f"{entry.entry_id}_setting_71") is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_a_refused_command_raises(hass, app):
     entry = await add_entry(hass, app)
     await until(lambda: hass.states.get(SWITCH).state == "off")
