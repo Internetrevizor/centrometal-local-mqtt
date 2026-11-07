@@ -8,7 +8,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import LIMITS, NUMBER_PREFIX, READ_ONLY_SLOTS, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
+from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
 from .sensor import device_info
 from .switch import _deliver
 
@@ -16,11 +16,10 @@ PARALLEL_UPDATES = 0  # a later click must be able to replace one still waiting
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    # A setting that became read only is now a sensor: its old number would stay behind as unavailable.
+    # 1.6.9 showed the stop buffer tank difference as a sensor; it is a setting again, and the sensor would stay behind.
     registry = er.async_get(hass)
-    for slot in READ_ONLY_SLOTS:
-        if old := registry.async_get_entity_id("number", DOMAIN, f"{entry.entry_id}_setting_{slot}"):
-            registry.async_remove(old)
+    if old := registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_PVAL_71_0"):
+        registry.async_remove(old)
     async_add_entities([PelTecSetting(entry.runtime_data, entry.entry_id, slot) for slot in SETTINGS])
 
 

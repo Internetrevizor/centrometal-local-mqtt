@@ -493,25 +493,21 @@ class ValueCheckTests(unittest.TestCase):
         self.assertNotIn("B_Tak1_1", state.values)
         self.assertEqual((state.values["B_Tk1"], state.values["B_STATE"], state.values["SE00"]), ("61.5", "D3", "whatever"))
 
-    def test_the_stop_buffer_tank_temperature_is_only_read(self):
-        self.assertNotIn(71, p.LIMITS)
-        self.assertNotIn(71, p.SETTINGS)
-        self.assertIn(71, p.READ_SLOTS)
-        self.assertTrue(p.is_entity("PVAL_71_0"))
-        self.assertFalse(p.is_entity("PVAL_67_0"))
-        name, _, _, _, entity_id = p.parameter_info("PVAL_71_0")
-        self.assertEqual((name, entity_id), ("Stop buffer tank temperature", "sensor.peltec_ii_lambda_stop_buffer_tank_temperature"))
-        self.assertEqual(p.display_value("PVAL_71_0", 9), 9.0)
+    def test_the_stop_buffer_tank_difference_is_a_setting(self):
+        self.assertEqual(p.LIMITS[71], (3, 30))
+        self.assertIn(71, p.SETTINGS)
+        self.assertEqual(set(p.READ_SLOTS), set(p.LIMITS))
+        self.assertFalse(p.is_entity("PVAL_71_0"))
 
     def test_a_setting_read_an_hour_ago_is_still_current(self):
-        self.assertTrue(p.is_fresh(537, "PVAL_71_0"))
-        self.assertTrue(p.is_fresh(3700, "PVAL_71_0"))
-        self.assertFalse(p.is_fresh(5000, "PVAL_71_0"))
+        self.assertTrue(p.is_fresh(537, "PVAL_67_0"))
+        self.assertTrue(p.is_fresh(3700, "PVAL_67_0"))
+        self.assertFalse(p.is_fresh(5000, "PVAL_67_0"))
         self.assertFalse(p.is_fresh(537, "B_Tak1_1"))
         self.assertTrue(p.is_fresh(60))
 
     def test_steps_of_the_boiler_panel(self):
-        self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 291, 292, 576, p.K1_SWITCH_SLOT)], [1] * 7)
+        self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 71, 291, 292, 576, p.K1_SWITCH_SLOT)], [1] * 8)
 
     def test_mode_and_priority_are_read_from_pval_or_the_regular_message(self):
         self.assertEqual(p.setting_value({"PVAL_4_0": 3, "B_PTV/GRI_SEL": 0}, 4, "B_PTV/GRI_SEL"), 3)

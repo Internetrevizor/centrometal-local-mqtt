@@ -84,7 +84,6 @@ PARAMETERS = {
     "B_cm2k": ("CM2K Modules", "number", None, True, "cm2k_modules"),
     "B_signal": ("WiFi Signal", "number", "dB", True, "wifi_signal"),
     "B_Time": ("Controller Clock", "clock", None, True, "controller_clock"),
-    "PVAL_71_0": ("Stop buffer tank temperature", "setpoint", None, False, "stop_buffer_tank_temperature"),
     "CNT_0": ("Boiler Work + Standby Time", "counter", "min", False, "burner_work"),
     "CNT_15": ("Boiler Work Time", "counter", "min", False, "reserve_counter"),
     "CNT_1": ("Number of Burner Starts", "counter", None, False, "number_of_burner_start"),
@@ -165,19 +164,18 @@ SETTINGS = {
     67: ("Buffer tank temperature", 1, "buffer_tank_temperature", 80),
     68: ("Buffer tank temperature differential", 1, "buffer_tank_temperature_differential", 10),
     70: ("Minimal buffer tank temperature", 1, "minimal_buffer_tank_temperature", 20),
+    71: ("Stop buffer tank temperature", 1, "stop_buffer_tank_temperature", 5),
     291: ("DHW temperature", 1, "dhw_temperature_k1_circuit", 50),
     292: ("DHW difference", 1, "dhw_difference_k1_circuit", 5),
     576: ("Boiler difference", 1, "boiler_difference", 5),
 }
 # The only list of writable slots, with the controller's own limits (min, max), read from the portal 06.11.2026.
 # The app takes it from this file as well: it refuses what is not here.
-LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10),
-          DHW_MODE_SLOT: (0, 3), DHW_PRIORITY_SLOT: (0, 1)}
-# Read and shown, never written. 71 (stop buffer tank temperature) is set by the controller itself on scheme 43: the panel
-# does not let it be changed (checked by the owner, 07.11.2026), although the manual lists it as a setting, 3 to 30.
-# Seen the same day: buffer tank temperature 67 -> 80 -> 67 on the panel, and 71 followed about 12 s later, 9 -> 5 -> 9.
-READ_ONLY_SLOTS = (71,)
-READ_SLOTS = (*LIMITS, *READ_ONLY_SLOTS)
+LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), 71: (3, 30), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40),
+          576: (5, 10), DHW_MODE_SLOT: (0, 3), DHW_PRIORITY_SLOT: (0, 1)}
+# Read once an hour and after a write. On scheme 43 only the maximum boiler temperature is computed by the controller
+# (buffer tank temperature + 5); 71, the stop buffer tank difference, is set on the panel like the others (owner, 07.11.2026).
+READ_SLOTS = tuple(LIMITS)
 MAX_AGE_SECONDS = 480
 # Settings (PVAL_*) are read once an hour, or when they change on the panel: an hour old is still the current value.
 SETTING_MAX_AGE_SECONDS = 3600 + 900
