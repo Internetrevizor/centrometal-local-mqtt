@@ -161,6 +161,25 @@ async def test_setting_the_held_value_writes_nothing(hass, app):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_clicks_on_a_setting_send_only_the_last_value(hass, app):
+    entry = await add_entry(hass, app)
+    number = "number.technical_room_centrometal_peltec_ii_peltec_ii_lambda_buffer_tank_temperature"
+    await until(lambda: hass.states.get(number) is not None and hass.states.get(number).state not in ("unknown", "unavailable"))
+    sent = []
+    real = app.gateway.request_setting
+
+    def spy(slot, value):
+        sent.append((slot, value))
+        return real(slot, value)
+
+    with patch("custom_components.centrometal_local.number.WRITE_SETTLE_SECONDS", .3), \
+            patch("custom_components.centrometal_local.COMMAND_WAIT_SECONDS", .2), patch.object(app.gateway, "request_setting", spy):
+        await asyncio.gather(*(hass.services.async_call("number", "set_value", {"entity_id": number, "value": v}, blocking=True)
+                               for v in (68, 69, 70)))
+    assert sent == [(67, 70)]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_a_refused_command_raises(hass, app):
     entry = await add_entry(hass, app)
     await until(lambda: hass.states.get(SWITCH).state == "off")

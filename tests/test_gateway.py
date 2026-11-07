@@ -646,6 +646,14 @@ class SettingTests(CommandTests):
                      b'{"slot":71,"value":9}', b'{"slot":291,"value":50.3}', b'{"slot":292,"value":5.5}', b'{"slot":67,"value":66.5}'):
             self.assertFalse(b"200 OK" in await self.api(gateway, self.post_setting(body)), body)
 
+    async def test_mode_and_priority_take_only_their_values(self):
+        gateway, port = await self.start(first_poll_delay_seconds=60)
+        await self.handshake(port)
+        for body in (b'{"slot":4,"value":3}', b'{"slot":898,"value":0}'):
+            self.assertIn(b"200 OK", await self.api(gateway, self.post_setting(body)), body)
+        for body in (b'{"slot":4,"value":4}', b'{"slot":4,"value":1.5}', b'{"slot":898,"value":2}', b'{"slot":5,"value":1}'):
+            self.assertFalse(b"200 OK" in await self.api(gateway, self.post_setting(body)), body)
+
     async def test_dhw_temperature_takes_whole_degrees(self):
         gateway, port = await self.start(first_poll_delay_seconds=60)
         await self.handshake(port)

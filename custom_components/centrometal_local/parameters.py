@@ -148,9 +148,18 @@ HISTORY_ENTITY_ID = ROOM_PREFIX + "event_history"
 SWITCH_ENTITY_ID = "switch.peltec_ii_lambda_boiler_switch"
 K1_SWITCH_ENTITY_ID = "switch.k1_heating_circuit_off_on"
 K1_SWITCH_SLOT = 272
+# Seen on 07.11.2026 when the owner changed them on the panel: PVAL_4_0 together with B_PTV/GRI_SEL, and PVAL_898_0
+# with B_PTV_PRI (0 when the priority was switched off, 1 with it on). Written like any setting, read back from PVAL.
+DHW_MODE_SLOT = 4
+DHW_PRIORITY_SLOT = 898
+# A setting goes to the boiler only once it has stayed the same this long: the arrows of a number box send a value at
+# every click, and each one would be a write to the controller's memory.
+WRITE_SETTLE_SECONDS = 3
 CONNECTION_ENTITY_ID = "binary_sensor.centrometal_boiler_system_connection"
 ALARM_ENTITY_ID = "binary_sensor.peltec_ii_lambda_alarm"
 NUMBER_PREFIX = "number.technical_room_centrometal_peltec_ii_peltec_ii_lambda_"
+DHW_MODE_ENTITY_ID = "select.technical_room_centrometal_peltec_ii_peltec_ii_lambda_dhw_heating_mode"
+DHW_PRIORITY_ENTITY_ID = "switch.technical_room_centrometal_peltec_ii_peltec_ii_lambda_dhw_priority"
 # slot: (name, step, object id, default)
 SETTINGS = {
     67: ("Buffer tank temperature", 1, "buffer_tank_temperature", 80),
@@ -162,7 +171,8 @@ SETTINGS = {
 }
 # The only list of writable slots, with the controller's own limits (min, max), read from the portal 06.11.2026.
 # The app takes it from this file as well: it refuses what is not here.
-LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10)}
+LIMITS = {67: (40, 85), 68: (5, 40), 70: (5, 51), K1_SWITCH_SLOT: (0, 1), 291: (40, 85), 292: (4, 40), 576: (5, 10),
+          DHW_MODE_SLOT: (0, 3), DHW_PRIORITY_SLOT: (0, 1)}
 # Read and shown, never written. 71 (stop buffer tank temperature) is set by the controller itself on scheme 43: the panel
 # does not let it be changed (checked by the owner, 07.11.2026), although the manual lists it as a setting, 3 to 30.
 # Seen the same day: buffer tank temperature 67 -> 80 -> 67 on the panel, and 71 followed about 12 s later, 9 -> 5 -> 9.
@@ -194,6 +204,13 @@ def is_entity(key):
     if key in PARAMETERS:
         return True
     return key not in NOT_ENTITIES and not TABLE_RE.match(key) and not ALARM_RE.match(key)
+
+
+def setting_value(values, slot, fallback=None):
+    """What the controller holds for a setting: its PVAL, or the regular message that carries the same value."""
+    values = values or {}
+    value = number(values.get(f"PVAL_{slot}_0"))
+    return number(values.get(fallback)) if value is None and fallback else value
 
 
 def setting_step(slot):

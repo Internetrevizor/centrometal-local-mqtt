@@ -1,12 +1,16 @@
 """The writable PelTec settings. Limits come from the controller; what is shown is read back from it."""
+import asyncio
+
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, commands_available, number
+from .parameters import LIMITS, NUMBER_PREFIX, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
 from .sensor import device_info
 from .switch import _deliver
+
+PARALLEL_UPDATES = 0  # a later click must be able to replace one still waiting
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -44,4 +48,9 @@ class PelTecSetting(CoordinatorEntity, NumberEntity):
                 and self.native_value is not None)
 
     async def async_set_native_value(self, value):
+        """Only the value the box settles on is written: every click of its arrows is a call of its own."""
+        self._wanted = value
+        await asyncio.sleep(WRITE_SETTLE_SECONDS)
+        if getattr(self, "_wanted", None) != value:
+            return
         await _deliver(self.coordinator, lambda: self.coordinator.async_send_setting(self.slot, value), "setting")
