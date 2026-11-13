@@ -58,6 +58,6 @@ jobs:
           docker logs app
           test "$(docker inspect -f '{{.State.Running}}' app)" = true
           test "$(docker inspect -f '{{.AppArmorProfile}}' app)" = centrometal_local_mqtt
-          curl -sf "http://$(docker inspect -f '{{.NetworkSettings.IPAddress}}' app):8765/health"
+          curl -sf "http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' app):8765/health"
           docker stop -t 5 app
           test "$(docker inspect -f '{{.State.ExitCode}}' app)" = 0
