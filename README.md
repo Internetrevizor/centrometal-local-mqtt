@@ -4,7 +4,7 @@ Run a Centrometal PelTec II Lambda from Home Assistant **without the Centrometal
 
 Community project, not affiliated with Centrometal. No firmware change and no wiring: the boiler keeps its own controller and all its safety functions.
 
-**Tested on one boiler:** PelTec II Lambda, firmware v3.03dL, scheme 43 (buffer + K1 DHW). Other models and schemes need their own check.
+**Tested on one boiler:** PelTec II Lambda 36, firmware v3.03dL, scheme 43 (buffer + K1 DHW). Other models and schemes need their own check.
 
 ## Install
 
@@ -52,7 +52,7 @@ Every parameter the boiler sends becomes a sensor, with English names. Every ent
 
 - `switch.peltec_ii_lambda_boiler_switch`: boiler on/off (tested).
 - On scheme 43, K1 is the DHW circuit and pump P1. Signals that repeat another one have no entity of their own, and values with an unknown meaning start disabled.
-- `switch.peltec_ii_lambda_dhw_circuit` and seven `number.peltec_ii_lambda_...` settings: written with `PWR`, in steps of 1, as on the boiler panel. A value typed or clicked into a box is written once it has stayed the same for 3 s, so clicking the arrows sends one write, not one per click. `select.peltec_ii_lambda_dhw_heating_mode_setting` (DHW + heating, DHW only, Heating only, Auto; slot 4) and `switch.peltec_ii_lambda_dhw_priority_setting` (slot 898) are written the same way. The format follows the portal's own request; **writing has not been tested on a real boiler yet.**
+- `switch.peltec_ii_lambda_dhw_circuit` and seven `number.peltec_ii_lambda_...` settings: written with `PWR`, in steps of 1, as on the boiler panel. A value typed or clicked into a box is written once it has stayed the same for 3 s, so clicking the arrows sends one write, not one per click. `select.peltec_ii_lambda_dhw_heating_mode_setting` (DHW + heating, DHW only, Heating only, Auto; slot 4) and `switch.peltec_ii_lambda_dhw_priority_setting` (slot 898) are written the same way. The format follows the portal's own request; **writing has been tested on a real PelTec II Lambda 36**: every setting is read back from the controller after it is written.
 - `binary_sensor.peltec_ii_lambda_system_connection`: on while data keeps arriving.
 - `binary_sensor.peltec_ii_lambda_alarm`: on while the boiler reports an error or a warning; the codes are in its attributes, and past events survive a restart in Event History. Alarms are read only: nothing here can end one. The alarm format comes from another Centrometal model and has not been seen yet on a PelTec II.
 - `sensor.peltec_ii_lambda_sessions_closed`, `_malformed_frames`, `_commands_expired`: counters that survive restarts and stay in the long-term history. `Gateway State` also shows `close_reasons`, and the integration offers Download diagnostics, without the token.
@@ -70,7 +70,7 @@ Every parameter the boiler sends becomes a sensor, with English names. Every ent
 - `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
 - Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
 
-Tested on one real boiler: `local` and `cloud_proxy`.
+Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, readings, on/off and settings.
 
 ## Requirements
 
