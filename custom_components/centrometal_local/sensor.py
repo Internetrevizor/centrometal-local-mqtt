@@ -1,6 +1,7 @@
 """A sensor for every parameter the boiler sends, created the first time it arrives."""
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import UnitOfTemperature
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -111,6 +112,7 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry_id, key):
         super().__init__(coordinator)
         self.key = key
+        self._shown = None
         name, kind, extra, diagnostic, entity_id = parameter_info(key)
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_{key}"
@@ -127,6 +129,15 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         if kind in ("number", "counter", "measure") and extra:
             self._attr_native_unit_of_measurement = extra
+
+    @callback
+    def _handle_coordinator_update(self):
+        """Written when the boiler reported this parameter again, or when what is shown changed. So last_reported is the
+        moment of the boiler's last report, not of the app's last message, and a heartbeat writes no state at all."""
+        shown = (self.coordinator.reported_at(self.key), self.available, self.native_value, self.extra_state_attributes)
+        if shown != self._shown:
+            self._shown = shown
+            self.async_write_ha_state()
 
     @property
     def native_value(self):

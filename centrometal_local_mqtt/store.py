@@ -28,6 +28,12 @@ COUNTERS = ("sessions_closed", "malformed_frames", "stale_messages", "invalid_me
 # After leaking AT text the module sends messages again, with the same clMsgId, up to 234 s later (night of 06-07.11.2026: 34
 # messages, at most 32 numbers behind the newest). Further back than this is not a repeat: the numbering has started over.
 RETRANSMIT_WINDOW = 200
+# A burst of repeats is short (34 messages in that whole night). This many in a row, with nothing new between them, is a
+# module that started its numbering over just below the last number: without this limit up to RETRANSMIT_WINDOW good
+# messages would be thrown away, long enough for every reading to pass for old.
+MAX_REPEATS_IN_A_ROW = 64
+INFO_REPEAT_SECONDS = 600  # the same information message again within this time is the same event
+MAX_INFO_CODES = 100
 MAX_CLOSE_REASONS = 20
 MAX_AT_COMMANDS = 20
 
@@ -139,6 +145,8 @@ class State:
         self.malformed_frames = 0
         self.stale_messages = 0
         self.last_client_id: int | None = None
+        self._repeats_in_a_row = 0
+        self._info_seen: dict[str, tuple[Any, float]] = {}
         self.rejected_values = 0
         self.commands_expired = 0
         self.identity_changes = 0
@@ -237,6 +245,16 @@ class State:
         known = self.active_alarms.get(code)
         if (cleared and code not in self.active_alarms) or (not cleared and known == value):
             return
+        if not cleared and code.startswith("I"):
+            # Information is never active, so nothing above stops a repeat: each one would be a line of history and a
+            # write to the disk.
+            now = time.time()
+            seen = self._info_seen.get(code)
+            if len(self._info_seen) >= MAX_INFO_CODES and code not in self._info_seen:
+                self._info_seen.clear()
+            self._info_seen[code] = (value, now)
+            if seen is not None and seen[0] == value and 0 <= now - seen[1] < INFO_REPEAT_SECONDS:
+                return
         if cleared:
             self.active_alarms.pop(code, None)
         elif not code.startswith("I"):
@@ -281,8 +299,11 @@ class State:
         client_id = signed.get("clMsgId")
         if type(client_id) is not int:
             return False
-        if self.last_client_id is not None and 0 <= self.last_client_id - client_id < RETRANSMIT_WINDOW:
+        if (self.last_client_id is not None and 0 <= self.last_client_id - client_id < RETRANSMIT_WINDOW
+                and self._repeats_in_a_row < MAX_REPEATS_IN_A_ROW):
+            self._repeats_in_a_row += 1
             return True
+        self._repeats_in_a_row = 0
         self.last_client_id = client_id
         return False
 

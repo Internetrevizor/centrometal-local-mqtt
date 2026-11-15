@@ -885,7 +885,7 @@ def load_integration():
         "homeassistant": {},
         "homeassistant.config_entries": {"ConfigEntry": object},
         "homeassistant.const": {"UnitOfTemperature": types.SimpleNamespace(CELSIUS="C")},
-        "homeassistant.core": {"HomeAssistant": object},
+        "homeassistant.core": {"HomeAssistant": object, "callback": lambda function: function},
         "homeassistant.exceptions": {"HomeAssistantError": Exception},
         "homeassistant.components": {},
         "homeassistant.components.diagnostics": {"async_redact_data": lambda data, keys: data},
@@ -967,6 +967,18 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["values"], {"B_Tk1": 61, "B_Tak1_1": 55})
         self.assertLess(data["value_age_seconds"]["B_Tak1_1"], 5)
         self.assertEqual(data["mode"], "local")
+
+    def test_a_snapshot_of_a_known_report_keeps_its_moment(self):
+        package, *_ = load_integration()
+        coordinator, _ = self.stream_coordinator(package)
+        coordinator._apply({"values": {"B_Tk1": 60, "B_Tak1_1": 55}, "value_age_seconds": {"B_Tk1": 100, "B_Tak1_1": 100}})
+        first = coordinator.reported_at("B_Tk1")
+        coordinator._apply({"values": {"B_Tk1": 60, "B_Tak1_1": 55}, "value_age_seconds": {"B_Tk1": 100.4, "B_Tak1_1": 3}})
+        self.assertEqual(coordinator.reported_at("B_Tk1"), first, "the same report, seen again")
+        self.assertGreater(coordinator.reported_at("B_Tak1_1"), first, "reported again in the meantime")
+        coordinator._apply({"type": "delta", "values": {}, "seen": ["B_Tk1"]})
+        self.assertGreater(coordinator.reported_at("B_Tk1"), first)
+        self.assertIsNone(coordinator.reported_at("B_none"))
 
     def test_a_finished_command_becomes_one_event_and_old_ones_none(self):
         package, *_ = load_integration()
@@ -1074,6 +1086,28 @@ class AlarmTests(unittest.TestCase):
         state.ingest({"E12": "P", "clMsgId": 3})
         self.assertEqual(state.snapshot()["alarms"], {"W3": "B"})
         self.assertEqual(len(state.alarm_history), 4)
+
+    def test_information_repeated_at_every_answer_is_one_event(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "alarms.json")
+            state = g.State(alarm_path=path)
+            state.ingest({"I19.1": "C", "clMsgId": 1})
+            written = os.stat(path).st_mtime_ns
+            for number in range(2, 8):
+                state.ingest({"I19.1": "C", "clMsgId": number})
+            self.assertEqual(len(state.alarm_history), 1)
+            self.assertEqual(os.stat(path).st_mtime_ns, written, "a repeat writes nothing to the disk")
+            state.ingest({"I19.1": "D", "I20": "C", "clMsgId": 8})
+            self.assertEqual([x["code"] for x in state.alarm_history], ["I19.1", "I19.1", "I20"])
+            self.assertEqual(state.active_alarms, {})
+
+    def test_the_same_information_much_later_is_a_new_event(self):
+        state = g.State()
+        state.ingest({"I19.1": "C", "clMsgId": 1})
+        code, (value, moment) = next(iter(state._info_seen.items()))
+        state._info_seen[code] = (value, moment - 601)
+        state.ingest({"I19.1": "C", "clMsgId": 2})
+        self.assertEqual(len(state.alarm_history), 2)
 
     def test_alarms_survive_a_restart(self):
         with tempfile.TemporaryDirectory() as folder:

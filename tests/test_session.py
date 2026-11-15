@@ -424,6 +424,24 @@ class RepeatedMessageTests(unittest.TestCase):
         self.assertEqual(state.values["B_Tk1"], 63)
         self.assertEqual(state.stale_messages, 0)
 
+    def test_a_numbering_that_started_over_just_below_the_last_number_loses_little(self):
+        state = store.State()
+        for number in range(1, 121):
+            state.ingest({"B_Tk1": 60, "clMsgId": number})
+        lost = [number for number in range(1, 200) if not state.ingest({"B_Tk1": 70, "clMsgId": number})]
+        self.assertEqual(len(lost), store.MAX_REPEATS_IN_A_ROW)
+        self.assertEqual(state.values["B_Tk1"], 70)
+        self.assertFalse(state.ingest({"B_Tk1": 60, "clMsgId": 150}), "after that a repeat is a repeat again")
+
+    def test_repeats_between_new_messages_are_all_dropped(self):
+        state = store.State()
+        state.ingest({"B_Tk1": 60, "clMsgId": 1000})
+        for number in range(1001, 1101):
+            self.assertTrue(state.ingest({"B_Tk1": 61, "clMsgId": number}))
+            self.assertFalse(state.ingest({"B_Tk1": 60, "clMsgId": number - 20}))
+        self.assertEqual(state.stale_messages, 100)
+        self.assertEqual(state.values["B_Tk1"], 61)
+
     def test_a_message_without_a_number_is_accepted(self):
         state = store.State()
         state.ingest({"B_Tk1": 60, "clMsgId": 10})
@@ -505,6 +523,13 @@ class ValueCheckTests(unittest.TestCase):
         self.assertFalse(p.is_fresh(5000, "PVAL_67_0"))
         self.assertFalse(p.is_fresh(537, "B_Tak1_1"))
         self.assertTrue(p.is_fresh(60))
+
+    def test_what_describes_the_boiler_never_counts_as_old(self):
+        for key in ("B_VER", "B_KONF", "B_sng", "B_PRODNAME"):
+            self.assertTrue(p.is_fresh(86400, key), key)
+            self.assertFalse(p.is_fresh(None, key), key)
+        self.assertFalse(p.is_fresh(537, "B_Time"), "a clock that stopped is not the time")
+        self.assertFalse(p.is_fresh(537, "B_signal"))
 
     def test_steps_of_the_boiler_panel(self):
         self.assertEqual([p.setting_step(s) for s in (67, 68, 70, 71, 291, 292, 576, p.K1_SWITCH_SLOT)], [1] * 8)

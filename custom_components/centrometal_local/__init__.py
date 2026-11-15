@@ -24,6 +24,7 @@ STREAM_RETRY_SECONDS = 5
 COMMAND_WAIT_SECONDS = 15  # usually confirmed in under a second; a reconnect is left to the app, which keeps trying
 POST_ATTEMPTS = 4
 POST_RETRY_SECONDS = 5
+SAME_REPORT_SECONDS = 2  # a snapshot gives ages rounded to 0.1 s and takes a moment to arrive
 FINISHED = ("confirmed", "unchanged", "expired", "replaced", "rate_limited")
 
 
@@ -50,11 +51,19 @@ class GatewayCoordinator(DataUpdateCoordinator):
         else:
             self._values = dict(event["values"])
             ages = event.get("value_age_seconds", {})
-            self._received = {key: now - ages.get(key, 0) for key in self._values}
+            known, self._received = self._received, {}
+            for key in self._values:
+                moment, before = now - ages.get(key, 0), known.get(key)
+                # A report already known keeps its moment, so a new snapshot does not pass for a new report.
+                self._received[key] = before if before is not None and abs(moment - before) < SAME_REPORT_SECONDS else moment
             self._check_api_version(event.get("api_version"))
         self._last_answer = now
         self._report_commands(event.get("commands"))
         return self._build(event, now)
+
+    def reported_at(self, key):
+        """When the boiler last reported this parameter, changed or not."""
+        return self._received.get(key)
 
     def _check_api_version(self, version):
         """The app and the integration update separately. When they no longer understand each other, the user has to know."""

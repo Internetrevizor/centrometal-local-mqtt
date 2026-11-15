@@ -140,6 +140,37 @@ async def test_switch_returns_once_the_boiler_confirms(hass, app):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_last_reported_is_the_boilers_report_not_the_apps_message(hass, app):
+    """The app's heartbeat and the reports of other parameters must not pass for a report of this one."""
+    entry = await add_entry(hass, app)
+    await until(lambda: hass.states.get(UPPER) is not None and hass.states.get(UPPER).state == "55.0")
+    await asyncio.sleep(.3)  # the first messages of the stream are behind
+    before = hass.states.get(UPPER).last_reported
+    lower = "sensor.peltec_ii_lambda_puffer_lower"
+    app.gateway.state.ingest({"B_Tak2_1": 41, "clMsgId": 5})
+    await until(lambda: hass.states.get(lower).state == "41.0")
+    await asyncio.sleep(.7)  # three heartbeats of the app
+    assert hass.states.get(UPPER).last_reported == before
+    app.gateway.state.ingest({"B_Tak1_1": 55, "clMsgId": 6})
+    await until(lambda: hass.states.get(UPPER).last_reported > before)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_what_describes_the_boiler_stays_while_a_reading_goes_old(hass, app):
+    entry = await add_entry(hass, app)
+    version = "sensor.peltec_ii_lambda_software_version"
+    app.gateway.state.ingest({"B_VER": "v3.03dL", "clMsgId": 5})
+    await until(lambda: hass.states.get(version) is not None and hass.states.get(version).state == "v3.03dL")
+    coordinator = entry.runtime_data
+    for key in ("B_VER", "B_Tak1_1"):
+        coordinator._received[key] -= 1000
+    await until(lambda: hass.states.get(UPPER).state == "unavailable")
+    assert hass.states.get(version).state == "v3.03dL"
+    app.gateway.state.ingest({"B_Tak1_1": 56, "clMsgId": 6})
+    await until(lambda: hass.states.get(UPPER).state == "56.0")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_an_unconfirmed_command_is_not_reported_as_failed_while_the_app_keeps_trying(hass, app):
     app.echo = False
     entry = await add_entry(hass, app)
