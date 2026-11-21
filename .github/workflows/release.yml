@@ -17,6 +17,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A rework-* branch only carries a version to main after its image is built. Once main has it, it is removed.
+  rework-branches:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Remove the rework branches that main already holds
+        run: |
+          for branch in $(git for-each-ref --format='%(refname:lstrip=3)' 'refs/remotes/origin/rework-*'); do
+            if git merge-base --is-ancestor "origin/${branch}" HEAD; then
+              git push origin --delete "${branch}"
+            fi
+          done
+
   version:
     runs-on: ubuntu-latest
     outputs:

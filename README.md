@@ -155,7 +155,7 @@ pip install pytest-homeassistant-custom-component && python -m pytest   # the in
 
 `protocol.py`, `session.py`, `commands.py` and `store.py` touch no socket and take the time from outside, so `tests/test_session.py` runs a day of traffic in a moment. `tests/data/module_messages.jsonl` holds real messages of the boiler: numbers and stages only. `PELTEC_PCAP` points the capture tests to a private capture.
 
-The image is built by GitHub Actions and has to exist before a new `version` reaches `main`, because the store offers it from there. A tag `v*` publishes the GitHub release that HACS reads. `custom_components/centrometal_local/parameters.py` is the only list of parameters and writable slots: the app takes it from there at build time.
+The image is built by GitHub Actions and has to exist before a new `version` reaches `main`, because the store offers it from there: a version goes first to a `rework-<version>` branch, which builds the image, then to `main`, which publishes the GitHub release that HACS reads, with its notes from the changelog. The `rework-*` branches that `main` already holds are then removed. `custom_components/centrometal_local/parameters.py` is the only list of parameters and writable slots: the app takes it from there at build time.
 
 ## Disclaimer
 
