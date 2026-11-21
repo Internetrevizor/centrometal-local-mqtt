@@ -182,7 +182,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GatewayCoordinator(hass, entry)
-    await coordinator.async_refresh()
+    # The app has to answer first: which boiler it serves decides the device name and whether the entities that write
+    # exist. Until it answers, Home Assistant retries the setup on its own (ConfigEntryNotReady).
+    await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(hass, coordinator.async_follow_changes(), "centrometal_local follow changes")

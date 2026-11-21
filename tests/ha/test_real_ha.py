@@ -119,6 +119,23 @@ async def test_entities_keep_their_ids_and_follow_the_stream(hass, app):
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_setup_waits_for_the_app(hass, socket_enabled):
+    """Which boiler the app serves decides the device and the entities that write: no setup before the app answers."""
+    other = App(product="cmpelet")
+    await other.start()
+    try:
+        port = other.api_port
+        other.api.close()
+        await other.api.wait_closed()
+        entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, data={"host": "127.0.0.1", "port": port, "token": TOKEN})
+        entry.add_to_hass(hass)
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        assert entry.state is ConfigEntryState.SETUP_RETRY
+        assert hass.states.async_entity_ids("switch") == []
+    finally:
+        await other.stop()
+
+
 async def test_another_boiler_is_read_only_and_named_after_its_product(hass, socket_enabled):
     other = App(product="cmpelet")
     await other.start()
