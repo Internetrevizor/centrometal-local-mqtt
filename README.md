@@ -126,6 +126,8 @@ Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, read
 
 The app updates from the app store and the integration from HACS, separately. Update both to the same version. A pair that no longer understands each other raises a repair notice in Home Assistant.
 
+What changed in each version: [CHANGELOG](centrometal_local_mqtt/CHANGELOG.md), also shown on the app's page in Home Assistant.
+
 ## Options
 
 | Option | Meaning |

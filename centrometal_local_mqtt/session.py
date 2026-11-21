@@ -7,7 +7,8 @@ and only once per session; PING comes every 60 s; REFRESH is answered in about 0
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from commands import Command, CommandBook
 from parameters import READ_SLOTS, TESTED_PRODUCT, setting_key

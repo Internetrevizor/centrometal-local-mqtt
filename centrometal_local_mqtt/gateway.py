@@ -32,7 +32,7 @@ from http import HTTPStatus
 from typing import Any
 
 from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
-from parameters import API_VERSION, LIMITS, READ_SLOTS, TESTED_PRODUCT, setting_key, setting_step
+from parameters import API_VERSION, LIMITS, READ_SLOTS, TESTED_PRODUCT, setting_key, setting_step  # noqa: F401  (READ_SLOTS: read by the tests through this module)
 from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
     MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
     topic_parts, varint, verify_payload,
@@ -149,7 +149,7 @@ def _sse(event: dict[str, Any]) -> bytes:
     return b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
 
 
-async def stream_events(writer: asyncio.StreamWriter, gateway: "Gateway") -> None:
+async def stream_events(writer: asyncio.StreamWriter, gateway: Gateway) -> None:
     """All the readings once, then only what changes, with a heartbeat that says the app is alive."""
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n")
     sent = gateway.state.revision
@@ -163,7 +163,7 @@ async def stream_events(writer: asyncio.StreamWriter, gateway: "Gateway") -> Non
         await asyncio.wait_for(writer.drain(), 10)
 
 
-async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: "Gateway") -> None:
+async def send_http_status(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway) -> None:
     try:
         async with asyncio.timeout(3):
             line = await reader.readline()
@@ -304,7 +304,7 @@ class Gateway:
         if command is None:
             return HTTPStatus.CONFLICT, json.dumps({"accepted": False, "state": "refused"}).encode()
         if isinstance(wait, (int, float)) and not isinstance(wait, bool) and wait > 0 and command.state not in FINISHED:
-            with contextlib.suppress(asyncio.TimeoutError):
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(command.finished.wait(), min(wait, MAX_COMMAND_WAIT_SECONDS))
         accepted = command.state != RATE_LIMITED
         return (HTTPStatus.OK if accepted else HTTPStatus.CONFLICT,
@@ -351,7 +351,7 @@ class Gateway:
             if first[0] == 0x20 and len(first) >= 4 and first[3] != 0:
                 raise CloudUnavailable(f"CONNACK refused, code {first[3]}")
             return reader, writer, first
-        except (OSError, asyncio.TimeoutError, CloudUnavailable) as exc:
+        except (TimeoutError, OSError, CloudUnavailable) as exc:
             if writer is not None:
                 writer.close()
                 with contextlib.suppress(Exception):
@@ -398,7 +398,7 @@ class Gateway:
         while True:
             try:
                 chunk = await asyncio.wait_for(reader.read(65536), SESSION_TICK_SECONDS)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Since Python 3.11 a socket ETIMEDOUT is the same exception as the wait above.
                 if reader.exception() is not None:
                     raise reader.exception() from None
@@ -451,7 +451,7 @@ class Gateway:
             transport = previous.writer.transport
             if transport is not None:
                 transport.abort()
-            with contextlib.suppress(asyncio.TimeoutError):
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(previous.done.wait(), 5)
             self.state.last_session_end = "replaced by a new connection"
         if self._current is not session:
@@ -518,7 +518,7 @@ class Gateway:
         current = self._current
         if current is not None and current.writer.transport is not None:
             current.writer.transport.abort()
-            with contextlib.suppress(asyncio.TimeoutError):
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(current.done.wait(), 2)
         self.state.save_values()  # last: closing the session above still changes the counters
 

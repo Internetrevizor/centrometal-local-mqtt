@@ -10,8 +10,9 @@ A command ends in one of these states, and only the boiler's own answer can conf
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import datetime, UTC
+from typing import Any
+from collections.abc import Callable
 
 from parameters import number, setting_key
 
@@ -80,7 +81,7 @@ class CommandBook:
     def _record(self, command: Command, now: float) -> None:
         self.results[command.key] = {
             "id": command.ident, "value": command.value, "state": command.state, "attempts": command.attempts,
-            "seconds": round(now - command.created, 1), "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "seconds": round(now - command.created, 1), "time": datetime.now(UTC).isoformat(timespec="seconds"),
         }
 
     def _finish(self, command: Command, state: str, now: float) -> None:

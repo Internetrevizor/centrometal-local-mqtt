@@ -639,6 +639,8 @@ class NoAccessToHomeAssistantTests(unittest.TestCase):
         manifest = json.loads((ROOT / "custom_components/centrometal_local/manifest.json").read_text())
         config = (ROOT / "centrometal_local_mqtt/config.yaml").read_text()
         self.assertIn(f"\nversion: {manifest['version']}\n", config)
+        changelog = (ROOT / "centrometal_local_mqtt/CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn(f"\n## {manifest['version']} ", changelog, "the release notes come from the changelog")
         self.assertEqual(g.Gateway({"connection_mode": "local", "read_interval_seconds": 60}).status()["api_version"], p.API_VERSION)
         self.assertEqual(sorted(path.name for path in (ROOT / "custom_components").iterdir() if "__pycache__" not in path.name), ["centrometal_local"])
 

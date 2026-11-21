@@ -249,7 +249,7 @@ class LocalTests(Base):
         writer.write(up({"Ecurie": 1, "W_nou": 2, "I19": "C", "E8.1": "D", "clMsgId": 105}))
         await writer.drain()
         self.assertEqual((await next_message(reader))["E8.1_ACK"], "D")
-        with self.assertRaises(asyncio.TimeoutError):
+        with self.assertRaises(TimeoutError):
             await next_frame(reader, .3)
 
     async def test_new_connection_replaces_dead_session(self):
@@ -285,7 +285,7 @@ class LocalTests(Base):
         captured["reader"].set_exception(TimeoutError(110, "ETIMEDOUT"))
         await asyncio.sleep(1)
         task.cancel()
-        self.assertLess(max(b - a for a, b in zip(ticks, ticks[1:])), .3)
+        self.assertLess(max(b - a for a, b in zip(ticks, ticks[1:], strict=False)), .3)
         self.assertFalse(gateway.state.module_connected)
 
     async def test_other_ip_rejected(self):
@@ -340,7 +340,7 @@ class ProxyTests(Base):
         self.assertEqual(gateway.state.values["B_Tak1_1"], 61.5)
         self.assertEqual(gateway.state.mode, "proxy")
         self.assertEqual(gateway.state.status_requests_sent, 0)
-        with self.assertRaises(asyncio.TimeoutError):
+        with self.assertRaises(TimeoutError):
             await next_frame(reader, .5)
 
     async def test_command_seen_and_secrets_not_stored(self):
@@ -467,7 +467,7 @@ class CaptureTests(Base):
         gateway, port = await self.start(connection_mode="cloud_proxy", upstream_port=cloud_port)
         reader, writer = await self.module(port)
         got = bytearray()
-        for index, packet in enumerate(ups):
+        for packet in ups:
             writer.write(packet)
             await writer.drain()
             got.extend(g.frame(*(await next_frame(reader))))
@@ -1165,7 +1165,7 @@ class LiveUpdateTests(Base):
         seen = []
         end = time.monotonic() + 3.6
         while time.monotonic() < end:
-            with self.assertRaises(asyncio.TimeoutError) if False else contextlib_null():
+            with self.assertRaises(TimeoutError) if False else contextlib_null():
                 message = await next_message(reader, 3)
                 seen.extend(k for k in message if k in ("REFRESH", "RSTAT"))
         self.assertGreaterEqual(seen.count("REFRESH"), 3)

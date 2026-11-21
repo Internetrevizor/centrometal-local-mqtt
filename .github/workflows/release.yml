@@ -58,6 +58,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
-      - run: gh release create "${{ needs.version.outputs.tag }}" --target "${GITHUB_SHA}" --title "${{ needs.version.outputs.tag }}" --generate-notes
+      - name: Release notes from the changelog (no section, no release)
+        run: |
+          tag="${{ needs.version.outputs.tag }}"
+          python3 .github/scripts/release_notes.py "${tag#v}" > release-notes.md
+      - run: gh release create "${{ needs.version.outputs.tag }}" --target "${GITHUB_SHA}" --title "${{ needs.version.outputs.tag }}" --notes-file release-notes.md
         env:
           GH_TOKEN: ${{ github.token }}

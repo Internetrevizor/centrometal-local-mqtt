@@ -4,7 +4,7 @@ Names and values are in English and match the cloud integration Internetrevizor/
 so automations and dashboards keep working. Translate them in Home Assistant, not here.
 A parameter that is not listed still gets a diagnostic sensor under its raw name, so nothing the boiler sends is lost.
 """
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import re
 
 OFF_ON = {0: "Off", 1: "On"}
@@ -276,7 +276,7 @@ def display_value(key, value):
         return number(value)
     if kind == "clock":
         try:
-            return datetime.fromtimestamp(int(str(value), 16), timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            return datetime.fromtimestamp(int(str(value), 16), UTC).strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, OverflowError, OSError):
             return None
     return str(value)

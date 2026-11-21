@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import hashlib
 import hmac
 import json
@@ -69,7 +69,7 @@ class Journal:
     def write(self, event: str, **fields: Any) -> None:
         if not self.path:
             return
-        line = {"t": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "e": event, **fields}
+        line = {"t": datetime.now(UTC).isoformat(timespec="milliseconds"), "e": event, **fields}
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as handle:
@@ -120,7 +120,7 @@ class ModuleIdentity:
 
 
 class State:
-    def __init__(self, journal: "Journal | None" = None, alarm_path: str | None = None,
+    def __init__(self, journal: Journal | None = None, alarm_path: str | None = None,
                  values_path: str | None = None, identity_path: str | None = None) -> None:
         self.journal = journal
         self.alarm_path = alarm_path
@@ -171,11 +171,12 @@ class State:
         self._changed.set()
         self._changed = asyncio.Event()
 
-    async def wait_for_change(self, since: int, timeout: float) -> None:
-        """Returns as soon as there is something newer than `since`, or after the timeout."""
+    async def wait_for_change(self, since: int, seconds: float) -> None:
+        """Returns as soon as there is something newer than `since`, or after `seconds`."""
         if since == self.revision:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), timeout)
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(seconds):
+                    await self._changed.wait()
             await asyncio.sleep(BURST_SECONDS)
 
     def _load_values(self) -> None:
@@ -263,7 +264,7 @@ class State:
             self.active_alarms.pop(code, None)
         elif not code.startswith("I"):
             self.active_alarms[code] = value
-        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        self.alarm_history.append({"code": code, "value": value, "time": datetime.now(UTC).isoformat(timespec="seconds")})
         self.alarm_history = self.alarm_history[-ALARM_HISTORY:]
         self._save_alarms()
 
@@ -278,7 +279,7 @@ class State:
         """Bytes in the module's stream that are not a frame. Only the length, the kind and the AT names are kept."""
         commands = at_commands(skipped)
         kind = "AT text" if b"AT+" in skipped else "other"
-        moment = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        moment = datetime.now(UTC).isoformat(timespec="seconds")
         names = ", ".join(f"{name} x{count}" for name, count in commands.items())
         self.malformed_frames += runs
         self.last_malformed = f"{moment} {len(skipped)} bytes, {kind}" + (f": {names}" if names else "")
@@ -299,7 +300,7 @@ class State:
 
     def note_session_end(self) -> None:
         self.sessions_closed += 1
-        self.last_session_end_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.last_session_end_time = datetime.now(UTC).isoformat(timespec="seconds")
         reason = self.last_session_end.split(":", 1)[0] or "unknown"
         if reason in self.close_reasons or len(self.close_reasons) < MAX_CLOSE_REASONS:
             self.close_reasons[reason] = self.close_reasons.get(reason, 0) + 1
@@ -373,7 +374,7 @@ class State:
         """Everything but the readings."""
         t = self.last_update_unix
         now = time.time()
-        stamp = lambda v: datetime.fromtimestamp(v, timezone.utc).isoformat() if v else None  # noqa: E731
+        stamp = lambda v: datetime.fromtimestamp(v, UTC).isoformat() if v else None  # noqa: E731
         return {
             "revision": self.revision,
             "mode": self.mode,
