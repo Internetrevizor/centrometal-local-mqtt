@@ -1,4 +1,4 @@
-"""Centrometal Local MQTT Protocol: local server for the WiFi module of a PelTec II Lambda. Python standard library only.
+"""Centrometal Local MQTT Protocol: local server for the WiFi module of a Centrometal boiler. Python standard library only.
 
 connection_mode:
   local        the module talks only to this server; the cloud is never contacted.
@@ -32,10 +32,10 @@ from http import HTTPStatus
 from typing import Any
 
 from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
-from parameters import API_VERSION, LIMITS, READ_SLOTS, setting_key, setting_step
+from parameters import API_VERSION, LIMITS, READ_SLOTS, TESTED_PRODUCT, setting_key, setting_step
 from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
     MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
-    varint, verify_payload,
+    topic_parts, varint, verify_payload,
 )
 from session import LocalSession
 from store import Journal, State, atomic_write
@@ -107,8 +107,13 @@ class MQTTObserver:
 
     def _publish(self, header: int, body: bytes) -> None:
         topic, payload = get_publish(header, body)
-        expected = "cm.inst.peltec2." if self.module_to_cloud else ("cm/srv/peltec2/", "cm.srv.peltec2.")
-        if not topic.startswith(expected):
+        if self.module_to_cloud:
+            parts = topic_parts(topic, "inst")
+            if parts:
+                self.state.note_product(parts[0])
+        else:
+            parts = topic_parts(topic.replace("/", "."), "srv")
+        if not parts:
             self.journal.message("other_topic", up=self.module_to_cloud)
             return
         key = self.session.key
@@ -251,6 +256,8 @@ class Gateway:
         """Never next to the cloud. In local mode a short reconnect does not refuse a command, it waits for the module."""
         if self.config["connection_mode"] != "local":
             return False
+        if self.state.product != TESTED_PRODUCT:
+            return False  # only the tested boiler is written to; any other is read only
         return (self._local is not None and self._local.synced) or self.state.is_fresh()
 
     def _kick(self) -> None:

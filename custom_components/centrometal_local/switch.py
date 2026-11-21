@@ -6,7 +6,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .parameters import (DHW_PRIORITY_SLOT, K1_SWITCH_SLOT,
-                         commands_available, number, setting_value)
+                         commands_available, number, setting_value, writable)
 from .sensor import device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +26,8 @@ async def _deliver(coordinator, send, what):
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
+    if not writable(entry.runtime_data.data):
+        return  # only the tested boiler is written to
     async_add_entities([PelTecCommand(entry.runtime_data, entry.entry_id), K1Circuit(entry.runtime_data, entry.entry_id),
                         DhwPriority(entry.runtime_data, entry.entry_id)])
 
@@ -38,7 +40,7 @@ class PelTecCommand(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_command"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def available(self):
@@ -75,7 +77,7 @@ class K1Circuit(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_k1_circuit"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def available(self):
@@ -112,7 +114,7 @@ class DhwPriority(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_setting_{DHW_PRIORITY_SLOT}"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def available(self):

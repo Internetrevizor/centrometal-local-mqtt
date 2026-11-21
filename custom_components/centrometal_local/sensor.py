@@ -7,12 +7,14 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import COUNTER_SENSORS, display_value, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
+from .parameters import COUNTER_SENSORS, display_value, product_name, product_of, enabled_by_default, extra_attributes, is_entity, is_fresh, parameter_info
 
 
-def device_info(entry_id):
-    return DeviceInfo(identifiers={(DOMAIN, entry_id)}, name="PelTec II Lambda", manufacturer="Centrometal",
-                      model="PelTec II Lambda", sw_version="Centrometal Local MQTT Protocol")
+def device_info(entry_id, coordinator=None):
+    """Named after the boiler: "PelTec II Lambda" for the tested one, as before, so its entity_ids stay."""
+    name = product_name(product_of(getattr(coordinator, "data", None)))
+    return DeviceInfo(identifiers={(DOMAIN, entry_id)}, name=name, manufacturer="Centrometal",
+                      model=name, sw_version="Centrometal Local MQTT Protocol")
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -42,7 +44,7 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_state"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def native_value(self):
@@ -72,7 +74,7 @@ class GatewayCounter(CoordinatorEntity, SensorEntity):
         self.key = key
         self._attr_name = COUNTER_SENSORS[key][0]
         self._attr_unique_id = f"{entry_id}_counter_{key}"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def native_value(self):
@@ -89,7 +91,7 @@ class EventHistory(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_event_history"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def native_value(self):
@@ -116,7 +118,7 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
         name, kind, extra, diagnostic, entity_id = parameter_info(key)
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_{key}"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
         self._attr_entity_registry_enabled_default = enabled_by_default(key)
         if diagnostic:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC

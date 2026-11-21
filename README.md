@@ -1,10 +1,19 @@
 # Centrometal Local MQTT Protocol
 
-Run a Centrometal PelTec II Lambda from Home Assistant **without the Centrometal cloud**. A small local server takes the place of the portal for the boiler's built-in WiFi module, so readings and on/off keep working with no internet.
+Run a Centrometal boiler from Home Assistant **without the Centrometal cloud**. A small local server takes the place of the portal for the boiler's WiFi module (built-in, or the CM WiFi-Box), so readings, and on a PelTec II Lambda on/off and settings, keep working with no internet.
 
 Community project, not affiliated with Centrometal. No firmware change and no wiring: the boiler keeps its own controller and all its safety functions.
 
 **Tested on one boiler:** PelTec II Lambda 36, firmware v3.03dL, scheme 43 (buffer + K1 DHW). Other models and schemes need their own check.
+
+## Supported boilers
+
+| Boiler | Product code | Readings | On/off and settings |
+|---|---|---|---|
+| PelTec II Lambda | `peltec2` | yes, **tested** | yes, **tested** |
+| PelTec, PelTec Compact, CM Pelet-set, BioTec (incl. BioTec-L), BioTec-Plus | `peltec`, `compact`, `cmpelet`, `biotec`, `biopl` | yes, not tested | no: read only |
+
+The WiFi module of every Centrometal boiler speaks the same protocol; only the product code in its MQTT topics differs. The app serves any product code, and the device in Home Assistant is named after it (for example `CM Pelet-set`, so `sensor.cm_pelet_set_...`). On a boiler other than the PelTec II nothing is ever sent but read requests: no on/off, no setting written, no settings table read, because the setting numbers are the PelTec II's. Parameters the PelTec II also has get their English names; any other one gets a diagnostic sensor under its raw name, disabled until you enable it. If you run another model, an issue with your diagnostics file helps to name its parameters.
 
 ## Install
 
@@ -71,7 +80,7 @@ Every parameter the boiler sends becomes a sensor, with English names. Every ent
 - `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
 - Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
 
-Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, readings, on/off and settings.
+Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, readings, on/off and settings. Other boilers: see [Supported boilers](#supported-boilers).
 
 ## Requirements
 

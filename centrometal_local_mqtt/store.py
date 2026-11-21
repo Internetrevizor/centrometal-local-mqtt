@@ -163,6 +163,7 @@ class State:
         self.at_commands: dict[str, int] = {}
         self.last_malformed = ""
         self.rejected_ip = ""
+        self.product: str | None = None
         self._load_values()
 
     def mark_changed(self) -> None:
@@ -198,6 +199,9 @@ class State:
             reasons = data.get("close_reasons", {})
             if isinstance(reasons, dict):
                 self.close_reasons = {str(k): v for k, v in reasons.items() if type(v) is int}
+            product = data.get("product")
+            if isinstance(product, str) and product.isalnum() and len(product) <= 20:
+                self.product = product
             commands = data.get("at_commands", {})
             if isinstance(commands, dict):
                 self.at_commands = {str(k): v for k, v in commands.items() if type(v) is int}
@@ -207,7 +211,7 @@ class State:
     def values_payload(self) -> str:
         return json.dumps({"values": self.values, "times": self.value_times,
                            "counters": {name: getattr(self, name) for name in COUNTERS},
-                           "close_reasons": self.close_reasons, "at_commands": self.at_commands})
+                           "close_reasons": self.close_reasons, "at_commands": self.at_commands, "product": self.product})
 
     def write_values(self, payload: str) -> None:
         if self.values_path:
@@ -282,6 +286,12 @@ class State:
             if name in self.at_commands or len(self.at_commands) < MAX_AT_COMMANDS:
                 self.at_commands[name] = self.at_commands.get(name, 0) + count
         return kind, commands
+
+    def note_product(self, product: str) -> None:
+        """The boiler's product code, from the module's topic."""
+        if product != self.product:
+            self.product = product
+            self.mark_changed()
 
     def note_status_request(self) -> None:
         self.status_requests_sent += 1
@@ -367,6 +377,7 @@ class State:
         return {
             "revision": self.revision,
             "mode": self.mode,
+            "product": self.product,
             "module_connected": self.module_connected,
             "upstream_connected": self.upstream_connected,
             "last_update": stamp(t),

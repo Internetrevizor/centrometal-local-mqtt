@@ -19,7 +19,7 @@ class ModuleConnection(CoordinatorEntity, BinarySensorEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_connection"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def is_on(self):
@@ -36,7 +36,7 @@ class BoilerAlarm(CoordinatorEntity, BinarySensorEntity):
     def __init__(self, coordinator, entry_id):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry_id}_alarm"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def is_on(self):

@@ -25,18 +25,19 @@ def connect():
     return g.frame(0x10, mstr(b"MQTT") + bytes([4, 0xC2]) + (3600).to_bytes(2, "big") + mstr(b"BOXID") + mstr(b"BOXID") + mstr(b"test-pass"))
 
 
-def subscribe():
-    return g.frame(0x82, b"\x00\x01" + mstr(b"cm.srv.peltec2.BOXID") + b"\x00")
+def subscribe(product="peltec2"):
+    return g.frame(0x82, b"\x00\x01" + mstr(f"cm.srv.{product}.BOXID".encode()) + b"\x00")
 
 
-def up(obj):
-    return g.pub_frame("cm.inst.peltec2.BOXID", g.sign_obj(obj, KEY))
+def up(obj, product="peltec2"):
+    return g.pub_frame(f"cm.inst.{product}.BOXID", g.sign_obj(obj, KEY))
 
 
 class App:
     """The real gateway, plus a module that answers CMD with B_CMD when it is told to."""
 
-    def __init__(self, echo=True):
+    def __init__(self, echo=True, product="peltec2"):
+        self.product = product
         self.gateway = g.Gateway({
             "module_ip": "127.0.0.1", "connection_mode": "local", "read_interval_seconds": 60, "first_poll_delay_seconds": 0,
             "api_token": TOKEN, "event_heartbeat_seconds": .2})
@@ -48,8 +49,9 @@ class App:
         self.api = await asyncio.start_server(lambda r, w: g.send_http_status(r, w, self.gateway), "127.0.0.1", 0)
         self.api_port = self.api.sockets[0].getsockname()[1]
         reader, self.writer = await asyncio.open_connection("127.0.0.1", self.mqtt.sockets[0].getsockname()[1])
-        self.writer.write(connect() + subscribe() + up({"_sync": "id", "_token": "t", "clMsgId": 1}))
-        self.writer.write(up({"B_Tak1_1": 55, "B_Tak2_1": 40, "B_CMD": 0, "K1B_onOff": 1, "B_STATE": "OFF", "PVAL_67_0": 67, "clMsgId": 2}))
+        self.writer.write(connect() + subscribe(self.product) + up({"_sync": "id", "_token": "t", "clMsgId": 1}, self.product))
+        self.writer.write(up({"B_Tak1_1": 55, "B_Tak2_1": 40, "B_CMD": 0, "K1B_onOff": 1, "B_STATE": "OFF", "PVAL_67_0": 67,
+                              "clMsgId": 2}, self.product))
         await self.writer.drain()
         self.tasks.append(asyncio.create_task(self._module(reader)))
 
@@ -115,6 +117,25 @@ async def test_entities_keep_their_ids_and_follow_the_stream(hass, app):
     app.gateway.state.ingest({"B_Tak1_1": 56, "clMsgId": 5})
     await until(lambda: hass.states.get(UPPER).state == "56.0")
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_another_boiler_is_read_only_and_named_after_its_product(hass, socket_enabled):
+    other = App(product="cmpelet")
+    await other.start()
+    try:
+        await until(lambda: other.gateway.state.product == "cmpelet")
+        entry = await add_entry(hass, other)
+        upper = "sensor.cm_pelet_set_puffer_upper"
+        await until(lambda: hass.states.get(upper) is not None and hass.states.get(upper).state == "55.0")
+        for domain in ("switch", "number", "select"):
+            assert hass.states.async_entity_ids(domain) == [], domain
+        from homeassistant.helpers import device_registry as dr
+        device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
+        assert (device.name, device.model) == ("CM Pelet-set", "CM Pelet-set")
+        assert hass.states.get("sensor.cm_pelet_set_gateway_state").state == "local"
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    finally:
+        await other.stop()
 
 
 async def test_last_reported_keeps_moving_while_the_value_stays_the_same(hass, app):

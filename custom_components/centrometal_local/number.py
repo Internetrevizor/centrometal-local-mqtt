@@ -8,7 +8,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .parameters import LIMITS, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number
+from .parameters import LIMITS, SETTINGS, WRITE_SETTLE_SECONDS, commands_available, number, writable
 from .sensor import device_info
 from .switch import _deliver
 
@@ -20,6 +20,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     registry = er.async_get(hass)
     if old := registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_PVAL_71_0"):
         registry.async_remove(old)
+    if not writable(entry.runtime_data.data):
+        return  # only the tested boiler is written to
     async_add_entities([PelTecSetting(entry.runtime_data, entry.entry_id, slot) for slot in SETTINGS])
 
 
@@ -37,7 +39,7 @@ class PelTecSetting(CoordinatorEntity, NumberEntity):
         self._attr_native_step = step
         self._attr_native_min_value, self._attr_native_max_value = LIMITS[slot]
         self._attr_unique_id = f"{entry_id}_setting_{slot}"
-        self._attr_device_info = device_info(entry_id)
+        self._attr_device_info = device_info(entry_id, coordinator)
 
     @property
     def extra_state_attributes(self):

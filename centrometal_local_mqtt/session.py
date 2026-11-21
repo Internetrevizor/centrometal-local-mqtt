@@ -10,8 +10,8 @@ import json
 from typing import Any, Callable
 
 from commands import Command, CommandBook
-from parameters import READ_SLOTS, setting_key
-from protocol import ACK_RE, ModuleFrames, frame, get_publish, pub_frame, read_connect_fields, redact, sign_obj, signing_key, subscribe_packet, unpack_utf8, verify_payload
+from parameters import READ_SLOTS, TESTED_PRODUCT, setting_key
+from protocol import ACK_RE, ModuleFrames, frame, get_publish, pub_frame, read_connect_fields, redact, sign_obj, signing_key, subscribe_packet, topic_parts, unpack_utf8, verify_payload
 from store import Journal, State
 
 SYNC_TIMEOUT_SECONDS = 30
@@ -39,6 +39,7 @@ class LocalSession:
         self.key: bytes | None = None
         self.topic_server: str | None = None
         self.subscribed = False
+        self.product: str | None = None
         self.synced = False
         self.close_reason: str | None = None
         self.started = now
@@ -91,13 +92,16 @@ class LocalSession:
             self.out += frame(0x20, b"\x00\x00")
         elif kind == 8 and self.key is not None:
             packet_id, topics = subscribe_packet(body)
-            sub = next((t for t in topics if t.startswith("cm.srv.peltec2.")), None)
-            if sub:
-                # Captured: the WiFi module subscribes with dots, the broker publishes with slashes.
-                self.topic_server = "cm/srv/peltec2/" + sub.rsplit(".", 1)[-1]
+            parts = next((p for p in map(lambda t: topic_parts(t, "srv"), topics) if p), None)
+            if parts:
+                # Captured on a PelTec II: the module subscribes with dots, the portal publishes with slashes. Any
+                # product is accepted: the module of every Centrometal boiler speaks the same protocol.
+                self.product, serial = parts
+                self.topic_server = f"cm/srv/{self.product}/{serial}"
                 self.subscribed = True
+                self.state.note_product(self.product)
             self.out += frame(0x90, packet_id.to_bytes(2, "big") + bytes(
-                0 if t.startswith("cm.srv.peltec2.") else 0x80 for t in topics))
+                0 if topic_parts(t, "srv") else 0x80 for t in topics))
         elif kind == 12 and self.key is not None:
             self.last_heard = now
             self.out += frame(0xD0)
@@ -111,7 +115,7 @@ class LocalSession:
         if (head >> 1) & 3 == 1:
             _, off = unpack_utf8(body, 0)
             self.out += frame(0x40, body[off:off + 2])
-        if not topic.startswith("cm.inst.peltec2."):
+        if not topic_parts(topic, "inst"):
             return
         message = verify_payload(payload, self.key)
         if message is None:
@@ -128,7 +132,8 @@ class LocalSession:
             if type(client_id) is int and isinstance(token, str) and len(token) <= 80:
                 self._publish({"_sync_ACK": "ok", "clMsgId": client_id + 1, "_token": token})
                 self.synced = True
-                self.next_settings = now + RSTAT_DELAY + 2
+                # The settings table is read only on the tested boiler: its slot numbers are the PelTec II's.
+                self.next_settings = now + RSTAT_DELAY + 2 if self.product == TESTED_PRODUCT else None
                 self.next_refresh = now + self.first_poll_delay
                 self.book.delay_pending(self.next_refresh + 2)
                 self.event("local_sync_ack")

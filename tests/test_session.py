@@ -666,12 +666,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_health_needs_no_token(self):
         gateway = g.Gateway(self.config(api_token="x"))
+        gateway.state.product = "peltec2"
         port = await self.serve(gateway)
         self.assertIn(b"200 OK", await self.call(port, b"GET /health HTTP/1.1\r\n\r\n"))
         self.assertIn(b"401", await self.call(port, b"GET /events HTTP/1.1\r\n\r\n"))
 
     async def test_the_answer_says_what_came_of_the_command(self):
         gateway = g.Gateway(self.config())
+        gateway.state.product = "peltec2"
         gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
         port = await self.serve(gateway)
         task = asyncio.create_task(self.call(port, self.post(b"/command", {"CMD": 1, "wait": 5})))
@@ -683,12 +685,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_without_wait_the_answer_comes_at_once(self):
         gateway = g.Gateway(self.config())
+        gateway.state.product = "peltec2"
         gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
         raw = await self.call(await self.serve(gateway), self.post(b"/command", {"CMD": 1}))
         self.assertEqual(json.loads(raw.split(b"\r\n\r\n", 1)[1]), {"accepted": True, "id": 1, "state": "pending"})
 
     async def test_a_setting_over_the_limit_is_refused_with_its_reason(self):
         gateway = g.Gateway(self.config())
+        gateway.state.product = "peltec2"
         gateway.state.ingest({"B_Tk1": 60, "clMsgId": 1})
         gateway.commands._writes[67] = [__import__("time").monotonic()] * c.WRITE_LIMIT
         raw = await self.call(await self.serve(gateway), self.post(b"/setting", {"slot": 67, "value": 66}))
@@ -697,6 +701,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expired_command_is_counted_and_shown(self):
         gateway = g.Gateway(self.config())
+        gateway.state.product = "peltec2"
         gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
         gateway.commands.give_up_seconds = 0
         self.assertTrue(gateway.command(1))
@@ -707,6 +712,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_events_give_everything_once_then_only_changes_and_a_heartbeat(self):
         gateway = g.Gateway(self.config(event_heartbeat_seconds=.2))
+        gateway.state.product = "peltec2"
         gateway.state.ingest({"B_Tk1": 60, "B_Tak1_1": 55, "clMsgId": 1})
         reader, writer = await asyncio.open_connection("127.0.0.1", await self.serve(gateway))
         self.addCleanup(writer.close)
@@ -756,3 +762,88 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherBoilerTests(unittest.TestCase):
+    """The module of every Centrometal boiler speaks the same protocol; only the product in its topics differs. Any
+    product is served, read only: the PelTec II is the only one tested."""
+
+    def module(self, product="cmpelet"):
+        state, book, now = store.State(), c.CommandBook(), 1000.0
+        session = s.LocalSession(state, book, store.Journal(None),
+                                 {"read_interval_seconds": 60, "first_poll_delay_seconds": 2.0}, now, lambda *a, **k: None)
+        topic = f"cm.srv.{product}.BOXID".encode()
+        session.feed(connect() + proto.frame(0x82, b"\x00\x01" + mstr(topic) + b"\x00"), now)
+        suback = session.take_output()[-5:]
+        session.feed(proto.pub_frame(f"cm.inst.{product}.BOXID", proto.sign_obj(
+            {"_sync": "id", "_token": "t", "clMsgId": 0}, KEY)), now)
+        return session, state, suback
+
+    def published(self, session):
+        """(topic, message) of every PUBLISH the session sent."""
+        out = []
+        for head, body in proto.MQTTFrames().feed(session.take_output()):
+            if head >> 4 == 3:
+                topic, payload = proto.get_publish(head, body)
+                out.append((topic, proto.verify_payload(payload, KEY)))
+        return out
+
+    def test_another_product_is_answered_on_its_own_topic(self):
+        session, state, suback = self.module()
+        self.assertEqual(suback[-1], 0, "subscription granted")
+        sent = self.published(session)
+        self.assertEqual(sent[0][0], "cm/srv/cmpelet/BOXID")
+        self.assertEqual(sent[0][1]["_sync_ACK"], "ok")
+        self.assertEqual(state.product, "cmpelet")
+        session.feed(proto.pub_frame("cm.inst.cmpelet.BOXID", proto.sign_obj({"B_Tk1": 61.5, "clMsgId": 1}, KEY)), 1001)
+        self.assertEqual(state.values["B_Tk1"], 61.5)
+
+    def test_another_product_is_read_but_its_settings_table_is_not(self):
+        session, _, _ = self.module()
+        session.take_output()
+        sent = []
+        for step in range(1, 40):
+            session.tick(1000 + step)
+            sent.extend(name for _, message in self.published(session) for name in message)
+        self.assertIn("REFRESH", sent)
+        self.assertFalse([name for name in sent if name.startswith(("PRD", "PWR", "CMD"))])
+
+    def test_the_pel_tec_ii_still_reads_its_settings(self):
+        session, _, _ = self.module("peltec2")
+        session.take_output()
+        sent = []
+        for step in range(1, 40):
+            session.tick(1000 + step)
+            sent.extend(name for _, message in self.published(session) for name in message)
+        self.assertTrue([name for name in sent if name.startswith("PRD")])
+
+    def test_a_topic_that_is_not_a_boiler_is_refused(self):
+        self.assertIsNone(proto.topic_parts("cm.srv.peltec2", "srv"))
+        self.assertIsNone(proto.topic_parts("other.srv.peltec2.BOXID", "srv"))
+        self.assertIsNone(proto.topic_parts("cm.inst.peltec2.BOXID", "srv"))
+        self.assertEqual(proto.topic_parts("cm.inst.biopl.ABC123", "inst"), ("biopl", "ABC123"))
+
+    def test_nothing_is_written_to_another_product(self):
+        gateway = g.Gateway({"module_ip": "127.0.0.1", "connection_mode": "local", "read_interval_seconds": 60})
+        gateway.state.ingest({"B_CMD": 0, "clMsgId": 1})
+        gateway.state.note_product("cmpelet")
+        self.assertIsNone(gateway.request_command(1))
+        self.assertIsNone(gateway.request_setting(67, 66))
+        gateway.state.note_product("peltec2")
+        self.assertIsNotNone(gateway.request_command(1))
+        self.assertEqual(gateway.status()["product"], "peltec2")
+
+    def test_the_product_survives_a_restart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "values.json")
+            state = store.State(values_path=path)
+            state.note_product("biopl")
+            state.save_values()
+            self.assertEqual(store.State(values_path=path).product, "biopl")
+
+    def test_an_older_app_is_taken_for_a_pel_tec_ii(self):
+        self.assertTrue(p.writable({"values": {}}))
+        self.assertFalse(p.writable({"product": "cmpelet"}))
+        self.assertEqual(p.product_name("cmpelet"), "CM Pelet-set")
+        self.assertEqual(p.product_name("xyz"), "Centrometal xyz")
+        self.assertFalse(p.commands_available({"connection_mode": "local", "data_fresh": True, "product": "biopl"}))

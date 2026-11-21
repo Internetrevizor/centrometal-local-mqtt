@@ -182,6 +182,11 @@ SETTING_MAX_AGE_SECONDS = 3600 + 900
 # What the module says about the boiler itself. None of these is in the answer to a read request (see
 # tests/data/module_messages.jsonl), and they stay true for as long as the boiler is the same: they never count as old.
 DESCRIPTION_KEYS = frozenset(("B_FILE", "B_VER", "B_PRODNAME", "B_BRAND", "B_INST", "B_sng", "B_KONF", "B_addConf"))
+# The product in the module's MQTT topics (cm.inst.<product>.<serial>), the same code as the portal's device type. Only
+# the PelTec II has been tested; any other boiler is read only: no on/off, no setting written, no settings table read.
+TESTED_PRODUCT = "peltec2"
+PRODUCT_NAMES = {"peltec2": "PelTec II Lambda", "peltec": "PelTec", "compact": "PelTec Compact",
+                 "cmpelet": "CM Pelet-set", "biotec": "BioTec", "biopl": "BioTec-Plus"}
 API_VERSION = 1  # the app and the integration update separately: this goes up when one stops understanding the other
 COUNTER_SENSORS = {
     "sessions_closed": ("Sessions Closed", SENSOR_PREFIX + "sessions_closed"),
@@ -335,10 +340,24 @@ def enabled_by_default(key):
     return key != "B_Ths1" and parameter_info(key)[1] != "raw"
 
 
+def product_of(status):
+    """The boiler's product code. An app older than 1.7.4 does not say it, and it served only the PelTec II."""
+    return (status or {}).get("product") or TESTED_PRODUCT
+
+
+def product_name(product):
+    return PRODUCT_NAMES.get(product, f"Centrometal {product}")
+
+
+def writable(status):
+    """Only the tested boiler gets the entities that write: on/off, settings, mode and priority."""
+    return product_of(status) == TESTED_PRODUCT
+
+
 def commands_available(status):
     """Commands wait for the module during a short reconnect in local mode, so a session gap does not take them away."""
     status = status or {}
-    return status.get("connection_mode") == "local" and bool(status.get("data_fresh"))
+    return status.get("connection_mode") == "local" and bool(status.get("data_fresh")) and writable(status)
 
 
 def is_fresh(age, key=None):
