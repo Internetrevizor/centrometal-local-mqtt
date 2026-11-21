@@ -25,10 +25,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
         values = (coordinator.data or {}).get("values")
         if not isinstance(values, dict):
             return
-        keys = [k for k in values if is_entity(k) and k not in seen]
+        product = product_of(coordinator.data)
+        keys = [k for k in values if is_entity(k, product) and k not in seen]
         if keys:
             seen.update(keys)
-            async_add_entities([PelTecValue(coordinator, entry.entry_id, key) for key in keys])
+            async_add_entities([PelTecValue(coordinator, entry.entry_id, key, product) for key in keys])
 
     async_add_entities([BridgeStatus(coordinator, entry.entry_id), EventHistory(coordinator, entry.entry_id),
                         *(GatewayCounter(coordinator, entry.entry_id, key) for key in COUNTER_SENSORS)])
@@ -111,15 +112,16 @@ class EventHistory(CoordinatorEntity, SensorEntity):
 class PelTecValue(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, entry_id, key):
+    def __init__(self, coordinator, entry_id, key, product=None):
         super().__init__(coordinator)
         self.key = key
+        self.product = product
         self._shown = None
-        name, kind, extra, diagnostic, entity_id = parameter_info(key)
+        name, kind, extra, diagnostic, _ = parameter_info(key, product)
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_{key}"
         self._attr_device_info = device_info(entry_id, coordinator)
-        self._attr_entity_registry_enabled_default = enabled_by_default(key)
+        self._attr_entity_registry_enabled_default = enabled_by_default(key, product)
         if diagnostic:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
         if kind in ("temperature", "setpoint"):
@@ -143,11 +145,11 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return display_value(self.key, (self.coordinator.data or {}).get("values", {}).get(self.key))
+        return display_value(self.key, (self.coordinator.data or {}).get("values", {}).get(self.key), self.product)
 
     @property
     def extra_state_attributes(self):
-        return extra_attributes(self.key, (self.coordinator.data or {}).get("values", {}))
+        return extra_attributes(self.key, (self.coordinator.data or {}).get("values", {}), self.product)
 
     @property
     def available(self):

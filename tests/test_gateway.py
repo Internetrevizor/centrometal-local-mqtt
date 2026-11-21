@@ -567,6 +567,60 @@ class ParameterTests(unittest.TestCase):
         self.assertIn("grate", self.p.extra_attributes("B_specG", values)["Meaning"])
         self.assertEqual(self.p.extra_attributes("B_KONF", values)["P2"], "DHW Recirculation Pump (K1)")
 
+    def test_the_peltec_ii_keeps_every_name_and_entity(self):
+        for product in (None, "peltec2"):
+            for key, (name, kind, extra, diagnostic, _) in self.p.PARAMETERS.items():
+                self.assertEqual(self.p.parameter_info(key, product)[:4], (name, kind, extra, diagnostic), key)
+                self.assertTrue(self.p.is_entity(key, product), key)
+            for key in self.p.PELTEC2_DUPLICATES:
+                self.assertFalse(self.p.is_entity(key, product), key)
+        self.assertEqual(self.p.display_value("B_KONF", 42, "peltec2"), "43. BUF + K1 DHW")
+
+    def test_another_boiler_gets_the_names_of_its_family(self):
+        info = self.p.parameter_info
+        self.assertEqual(info("CNT_1", "biopl")[:3], ("Operation Pellets", "counter", "min"))
+        self.assertEqual(info("CNT_15", "biopl")[:3], ("Grate Cleaning", "counter", None))
+        self.assertEqual(info("CNT_3", "cmpelet")[:3], ("Number of Burner Starts", "counter", None))
+        self.assertEqual(info("CNT_1", "cmpelet")[:3], ("Working DHW Only", "counter", "min"))
+        self.assertEqual(info("B_Tpov1", "biopl")[0], "Mixer Temperature")
+        self.assertEqual(info("B_Tpov1", "peltec")[0], "Return Flow Temperature")
+        self.assertEqual(info("B_fan", "cmpelet")[:2], ("Heater Fan State", "map"))
+        self.assertEqual(info("B_P2", "peltec")[0], "P2 Pump")
+        # A counter that the family's own list does not have keeps its raw name, off until someone wants it.
+        self.assertEqual(info("CNT_7", "biotec")[:2], ("CNT_7", "raw"))
+        self.assertFalse(self.p.enabled_by_default("CNT_7", "biotec"))
+        # The PelTec II duplicates are the only readings of these on a boiler without a switch.
+        for key in self.p.PELTEC2_DUPLICATES:
+            self.assertTrue(self.p.is_entity(key, "biopl"), key)
+        self.assertEqual(info("B_P1", "biopl")[0], "Boiler Pump")
+        self.assertEqual(self.p.display_value("B_KONF", 42, "biopl"), "42")
+        self.assertEqual(self.p.extra_attributes("B_KONF", {"B_KONF": 42}, "biopl"), {"Original name": "B_KONF"})
+
+    def test_heating_circuits_and_wood_boiler_readings_are_named(self):
+        info = self.p.parameter_info
+        self.assertEqual(info("C1B_Tsob1")[:2], ("Circuit 1 Room Measured Temperature", "temperature"))
+        self.assertEqual(info("C2B_Tpol")[:2], ("Circuit 2 Flow Target Temperature", "setpoint"))
+        self.assertEqual(info("K3B_P")[0], "K3 Circuit Pump")
+        self.assertEqual(self.p.display_value("C1B_dayNight", 1), "Night")
+        self.assertEqual(info("C1B_unknown")[:2], ("C1B_unknown", "raw"))
+        self.assertEqual(info("B_Tk1b", "biopl")[:2], ("Boiler Temperature Wood", "temperature"))
+        self.assertEqual(self.p.display_value("B_Tlo1", 650), 650.0)  # a firebox runs far above 145 °C
+        self.assertIsNone(self.p.display_value("B_Tlo1", "?"))
+        self.assertTrue(self.p.is_fresh(10_000, "B_WifiVER"))
+        # The app checks only the PelTec II's parameters: nothing an untested boiler sends is thrown away.
+        self.assertTrue(self.p.valid_raw("B_Tlo1", "?"))
+
+    def test_names_and_ids_are_unique_for_every_family(self):
+        circuits = [f"{c}B{part}" for c in ("C1", "C2", "C3", "C4", "K2", "K3", "K4") for part in self.p.CIRCUIT_PARTS]
+        for product in (None, *self.p.PRODUCT_NAMES):
+            keys = {*self.p.PARAMETERS, *self.p.OTHER_PARAMETERS, *self.p.OTHER_PRODUCTS.get(product, {}),
+                    *self.p.OTHER_PRODUCT_DEFAULTS, *circuits}
+            info = [self.p.parameter_info(k, product) for k in keys if self.p.is_entity(k, product)]
+            self.assertEqual(len({x[0].casefold() for x in info}), len(info), product)
+            self.assertEqual(len({x[4] for x in info}), len(info), product)
+            for name, *_ in info:
+                self.assertTrue(name.isascii(), name)
+
 
 class CommandTests(Base):
     async def api(self, gateway, raw):

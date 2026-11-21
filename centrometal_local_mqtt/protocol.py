@@ -16,14 +16,14 @@ MAX_MODULE_FRAME = 4096  # the largest real message is about 300 bytes
 FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_ /.]{0,79}$")  # real key: B_PTV/GRI; manual codes: E8.1, W2.1
 COMMAND_RE = re.compile(r"^(CMD|PWR|SCCMD)\b")  # PRD only reads a settings table
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")  # controller manual, chapter 6: errors, warnings, information
-ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # scr34m acknowledges errors and warnings
+ACK_RE = re.compile(r"^[EW]\d+(\.\d+)?$")  # errors and warnings are acknowledged
 # cm.srv.<product>.<serial> (subscribed) and cm.inst.<product>.<serial> (published by the module).
 TOPIC_RE = re.compile(r"^cm\.(srv|inst)\.([a-z0-9]{2,20})\.([A-Za-z0-9]{1,40})$")
 AT_NAME_RE = re.compile(rb"(?<![A-Za-z0-9])AT(?:\+[A-Z0-9_]{1,20})?(?=[\r\n=?])")
 
 
 def signing_key(password: bytes) -> bytes:
-    """Matches scr34m's JSON signing key derivation for passwords <= 40 bytes."""
+    """The JSON signing key: the MQTT password, padded with the public seed to 40 bytes."""
     if not password or len(password) > len(SEED):
         raise ValueError("Unsupported MQTT password length")
     return password + SEED[len(password):]

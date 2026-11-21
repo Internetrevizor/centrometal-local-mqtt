@@ -1,4 +1,4 @@
-"""Every parameter of a PelTec II Lambda: name, how it is shown, and its entity_id.
+"""Every parameter the boiler sends: name, how it is shown, and its entity_id. The PelTec II Lambda is the tested boiler.
 
 Names and values are in English and match the cloud integration Internetrevizor/hass-centrometal-boiler (Apache-2.0),
 so automations and dashboards keep working. Translate them in Home Assistant, not here.
@@ -100,7 +100,7 @@ PARAMETERS = {
     "CNT_12": ("Time on D2", "counter", "min", False, "time_on_d2"),
     "CNT_13": ("Time on D1", "counter", "min", False, "time_on_d1"),
     "CNT_14": ("Time on D0", "counter", "min", False, "time_on_d0"),
-    # Known from the fork for PelTec, not sent by this boiler so far.
+    # Known from the cloud integration for the PelTec, not sent by this boiler so far.
     "B_FotV": ("Fire Sensor", "number", "kΩ", True, "b_fotv"),
     "B_HS_AKU": ("Hydraulic Separator / Buffer Config", "raw", None, True, "b_hs_aku"),
     "B_Inp1": ("Input Bitmask", "raw", None, True, "b_inp1"),
@@ -128,16 +128,133 @@ PARAMETERS = {
 }
 NOT_ENTITIES = {
     "PING", "CMD", "wf_req",
-    # The same signal under another name, checked on a night of real data: one entity is enough.
-    "B_P1", "B_Pk1_k2",  # K1B_P: 6 of 6 changes at the same moment; on scheme 43 this is pump P1
-    "B_zahK1_K2",  # K1B_zahP
-    "B_Tkm1",  # K1B_Tpol1 rounded to whole degrees: the same DHW sensor
-    "B_CMD",  # the state of the boiler switch
     "K1B_onOff",  # the state of the K1 switch
     "K1B_Prec",  # recirculation is pump P2
     # On scheme 43 K1 loads the DHW tank, and there is no room thermostat.
     "K1B_Tsob", "K1B_Tsob1", "K1B_dayNight", "K1B_kor", "K1B_korN", "K1B_korType",
 }
+# On the PelTec II the same signal under another name, checked on a night of real data: one entity is enough. Any other
+# boiler has no switch and was not checked, so it shows them.
+PELTEC2_DUPLICATES = frozenset((
+    "B_P1", "B_Pk1_k2",  # K1B_P: 6 of 6 changes at the same moment; on scheme 43 this is pump P1
+    "B_zahK1_K2",  # K1B_zahP
+    "B_Tkm1",  # K1B_Tpol1 rounded to whole degrees: the same DHW sensor
+    "B_CMD",  # the state of the boiler switch
+))
+# Parameters the tested PelTec II has not sent: other boilers, and heating circuits scheme 43 does not use. Names from the
+# cloud integration. Kept out of PARAMETERS, whose values the app checks before keeping them: from a boiler nobody has
+# tested here, no value is thrown away; one that is not a number is shown as unknown.
+OTHER_PARAMETERS = {
+    "B_CMD": ("Command Active", "map", OFF_ON, False, "command_active"),
+    "B_Pk1_k2": ("K1/K2 Pump", "map", OFF_ON, False, "k1_k2_pump"),
+    "B_zahK1_K2": ("K1/K2 Pump Demand", "map", OFF_ON, False, "k1_k2_pump_demand"),
+    "B_Tkm1": ("DHW Tank Temperature", "temperature", None, False, "dhw_tank_temperature"),
+    "B_Tk1b": ("Boiler Temperature Wood", "temperature", None, False, "boiler_temperature_wood"),
+    "B_Tk1p": ("Boiler Temperature Pellet", "temperature", None, False, "boiler_temperature_pellet"),
+    "B_Tlo1": ("Firebox Temperature", "temperature", None, False, "firebox_temperature"),
+    "B_Tak1": ("Buffer Tank Temperature (Upper)", "temperature", None, False, "buffer_tank_temperature_upper"),
+    "B_Tak2": ("Buffer Tank Temperature (Lower)", "temperature", None, False, "buffer_tank_temperature_lower"),
+    "B_zahP1": ("Boiler Pump Demand", "map", OFF_ON, False, "boiler_pump_demand"),
+    "B_zahP2": ("Second Pump Demand", "map", OFF_ON, False, "second_pump_demand"),
+    "B_zahP3": ("Third Pump Demand", "map", OFF_ON, False, "third_pump_demand"),
+    "B_priS": ("Air Flow Engine Primary", "number", "%", False, "air_flow_engine_primary"),
+    "B_secS": ("Air Flow Engine Secondary", "number", "%", False, "air_flow_engine_secondary"),
+    "B_zar": ("Glow", "text", None, False, "glow"),
+    "B_pbs": ("Wood Pellet Mode", "text", None, True, "wood_pellet_mode"),
+    "B_scs": ("Control Mode", "text", None, True, "control_mode"),
+    "B_preuz": ("Take Over", "text", None, True, "take_over"),
+    "B_cmsr100": ("Pellet Tank Level", "text", None, False, "pellet_tank_level"),
+    "B_freezEn": ("Freeze Guard", "text", None, True, "freeze_guard"),
+    "B_freezMon": ("Freeze Monitor", "text", None, True, "freeze_monitor"),
+    "B_netMon": ("Remote Start Enabled", "text", None, True, "remote_start_enabled"),
+    "B_uklKot": ("Boiler Operational", "text", None, True, "boiler_operational"),
+    "B_Add": ("Additional Features", "text", None, True, "additional_features"),
+    "B_CP": ("CentroPlus", "text", None, True, "centroplus"),
+    "B_KONF_STR": ("Setup", "text", None, True, "setup"),
+    "B_WifiVER": ("Wifi Box Version", "text", None, True, "wifi_box_version"),
+}
+# What a parameter means on a boiler other than the PelTec II, where it differs. Counters are numbered per family: on a
+# family with its own list, a counter not in it keeps its raw name rather than the PelTec II's.
+_MINUTES = "min"
+OTHER_PRODUCTS = {
+    "cmpelet": {
+        "B_Pk": ("Boiler Pump", "map", OFF_ON, False, "boiler_pump"),
+        "B_fan": ("Heater Fan State", "map", OFF_ON, False, "heater_fan_state"),
+        "B_zlj": ("Operation Mode", "text", None, False, "operation_mode"),
+        "CNT_0": ("Burner Work", "counter", _MINUTES, False, "burner_work"),
+        "CNT_1": ("Working DHW Only", "counter", _MINUTES, False, "working_dhw_only"),
+        "CNT_2": ("Freeze Protection", "counter", _MINUTES, False, "freeze_protection"),
+        "CNT_3": ("Number of Burner Starts", "counter", None, False, "number_of_burner_starts"),
+        "CNT_4": ("Fan Working Time", "counter", _MINUTES, False, "fan_working_time"),
+        "CNT_5": ("Electric Heater Working Time", "counter", _MINUTES, False, "electric_heater_working_time"),
+        "CNT_6": ("Number of Electric Heater Starts", "counter", None, False, "number_of_electric_heater_starts"),
+        "CNT_7": ("Vacuum Turbine Working Time", "counter", _MINUTES, False, "vacuum_turbine_working_time"),
+        "CNT_8": ("Boiler Pump Working Time", "counter", _MINUTES, False, "boiler_pump_working_time"),
+    },
+    "biotec": {
+        "B_Tpov1": ("Mixer Temperature", "temperature", None, False, "mixer_temperature"),
+        "B_Tptv1": ("Domestic Hot Water", "temperature", None, False, "domestic_hot_water"),
+        "B_P1": ("Boiler Pump", "map", OFF_ON, False, "boiler_pump"),
+        "B_P2": ("Second Pump", "map", OFF_ON, False, "second_pump"),
+        "B_P3": ("Third Pump", "map", OFF_ON, False, "third_pump"),
+        "B_zlj": ("Operation Mode", "text", None, False, "operation_mode"),
+        "CNT_0": ("Burner Work", "counter", _MINUTES, False, "burner_work"),
+        "CNT_4": ("Fan Working Time", "counter", _MINUTES, False, "fan_working_time"),
+    },
+    "biopl": {
+        "B_Tpov1": ("Mixer Temperature", "temperature", None, False, "mixer_temperature"),
+        "B_Tptv1": ("Domestic Hot Water", "temperature", None, False, "domestic_hot_water"),
+        "B_P1": ("Boiler Pump", "map", OFF_ON, False, "boiler_pump"),
+        "B_P2": ("Second Pump", "map", OFF_ON, False, "second_pump"),
+        "B_P3": ("Third Pump", "map", OFF_ON, False, "third_pump"),
+        "B_doz": ("Pellet Dispenser", "map", OFF_ON, False, "pellet_dispenser"),
+        "B_razP": ("Fuel Level", "measure", "%", False, "fuel_level"),
+        "B_zlj": ("Operation Mode", "text", None, False, "operation_mode"),
+        "CNT_0": ("Operation Wood", "counter", _MINUTES, False, "operation_wood"),
+        "CNT_1": ("Operation Pellets", "counter", _MINUTES, False, "operation_pellets"),
+        "CNT_2": ("Pellets D6", "counter", _MINUTES, False, "pellets_d6"),
+        "CNT_3": ("Pellets D5", "counter", _MINUTES, False, "pellets_d5"),
+        "CNT_4": ("Pellets D4", "counter", _MINUTES, False, "pellets_d4"),
+        "CNT_5": ("Pellets D3", "counter", _MINUTES, False, "pellets_d3"),
+        "CNT_6": ("Pellets D2", "counter", _MINUTES, False, "pellets_d2"),
+        "CNT_7": ("Startup Wood", "counter", None, False, "startup_wood"),
+        "CNT_8": ("Startup Pellets", "counter", None, False, "startup_pellets"),
+        "CNT_9": ("DHW And Heating Time", "counter", _MINUTES, False, "dhw_and_heating_time"),
+        "CNT_10": ("DHW Only Time", "counter", _MINUTES, False, "dhw_only_time"),
+        "CNT_11": ("Fan Time", "counter", _MINUTES, False, "fan_time"),
+        "CNT_12": ("Heater Time", "counter", _MINUTES, False, "heater_time"),
+        "CNT_13": ("Heater Starts", "counter", None, False, "heater_starts"),
+        "CNT_14": ("Screw Feeder Time", "counter", _MINUTES, False, "screw_feeder_time"),
+        "CNT_15": ("Grate Cleaning", "counter", None, False, "grate_cleaning"),
+    },
+}
+# Scheme 43 is the PelTec II's: on any other boiler P2 is just the second pump, and the configuration index has no name here.
+OTHER_PRODUCT_DEFAULTS = {
+    "B_P2": ("P2 Pump", "map", OFF_ON, False, "p2_pump"),
+    "B_KONF": ("Configuration", "text", None, True, "configuration"),
+}
+# Heating circuits: C1-C4, and K2-K4 (K1 is the DHW circuit of scheme 43, named above). Names as in the cloud integration.
+CIRCUIT_RE = re.compile(r"^(C[1-4]|K[2-4])B(_[A-Za-z0-9]+)$")
+DAY_NIGHT = {0: "Day", 1: "Night", 2: "Program"}
+CIRCUIT_PARTS = {
+    "_Tpol1": ("Flow Measured Temperature", "temperature", None, False),
+    "_Tpol": ("Flow Target Temperature", "setpoint", None, False),
+    "_Tsob1": ("Room Measured Temperature", "temperature", None, False),
+    "_Tsob": ("Room Target Temperature", "setpoint", None, False),
+    "_onOff": ("Heating Circuit Enabled", "map", OFF_ON, False),
+    "_P": ("Pump", "map", OFF_ON, False),
+    "_zahP": ("Pump Demand", "map", OFF_ON, False),
+    "_dayNight": ("Day Night Mode", "map", DAY_NIGHT, False),
+    "_Prec": ("Recirculation", "map", OFF_ON, True),
+    "_misC": ("Valve Closing", "map", OFF_ON, True),
+    "_misO": ("Valve Opening", "map", OFF_ON, True),
+    "_kor": ("Room Target Correction", "number", "°C", True),
+    "_korN": ("Night Correction", "number", "°C", True),
+    "_korType": ("Correction Type", "raw", None, True),
+    "_CircType": ("Heating Type", "raw", None, True),
+}
+# Above the bounds of the portal templates: the flue gas, and the firebox of a wood boiler.
+TEMPERATURE_MAX = {"B_Tdpl1": 300.0, "B_Tlo1": 1500.0}
 TABLE_RE = re.compile(r"^(PVAL|PDEF|PMIN|PMAX)_")
 ALARM_RE = re.compile(r"^[EWI]\d+(\.\d+)?$")
 PUMP_RE = re.compile(r"^B_P(\d+)$")
@@ -181,7 +298,8 @@ MAX_AGE_SECONDS = 480
 SETTING_MAX_AGE_SECONDS = 3600 + 900
 # What the module says about the boiler itself. None of these is in the answer to a read request (see
 # tests/data/module_messages.jsonl), and they stay true for as long as the boiler is the same: they never count as old.
-DESCRIPTION_KEYS = frozenset(("B_FILE", "B_VER", "B_PRODNAME", "B_BRAND", "B_INST", "B_sng", "B_KONF", "B_addConf"))
+DESCRIPTION_KEYS = frozenset(("B_FILE", "B_VER", "B_PRODNAME", "B_BRAND", "B_INST", "B_sng", "B_KONF", "B_addConf",
+                              "B_WifiVER"))
 # The product in the module's MQTT topics (cm.inst.<product>.<serial>), the same code as the portal's device type. Only
 # the PelTec II has been tested; any other boiler is read only: no on/off, no setting written, no settings table read.
 TESTED_PRODUCT = "peltec2"
@@ -208,9 +326,12 @@ def valid_raw(key, value):
     return True
 
 
-def is_entity(key):
+def is_entity(key, product=None):
+    """Whether a parameter gets a sensor. `product` is the boiler's code; None for the tested PelTec II."""
     if key in PARAMETERS:
         return True
+    if (product or TESTED_PRODUCT) == TESTED_PRODUCT and key in PELTEC2_DUPLICATES:
+        return False
     return key not in NOT_ENTITIES and not TABLE_RE.match(key) and not ALARM_RE.match(key)
 
 
@@ -226,10 +347,33 @@ def setting_step(slot):
     return SETTINGS[slot][1] if slot in SETTINGS else 1
 
 
-def parameter_info(key):
-    """(name, kind, extra, diagnostic, entity_id) for any parameter, also one seen for the first time."""
-    if key in PARAMETERS:
+def _product_info(key, product):
+    """What a parameter means on a boiler other than the PelTec II, where that differs; None where it does not."""
+    own = OTHER_PRODUCTS.get(product, {})
+    if key in own:
+        return own[key]
+    if key.startswith("CNT_") and any(k.startswith("CNT_") for k in own):
+        return key, "raw", None, True, key.lower()
+    return OTHER_PRODUCT_DEFAULTS.get(key)
+
+
+def parameter_info(key, product=None):
+    """(name, kind, extra, diagnostic, entity_id) for any parameter, also one seen for the first time. `product` is the
+    boiler's code; None for the tested PelTec II."""
+    product = product or TESTED_PRODUCT
+    circuit = CIRCUIT_RE.match(key)
+    other = _product_info(key, product) if product != TESTED_PRODUCT else None
+    if other is not None:
+        name, kind, extra, diagnostic, object_id = other
+    elif key in PARAMETERS:
         name, kind, extra, diagnostic, object_id = PARAMETERS[key]
+    elif key in OTHER_PARAMETERS:
+        name, kind, extra, diagnostic, object_id = OTHER_PARAMETERS[key]
+    elif circuit and circuit.group(2) in CIRCUIT_PARTS:
+        circuit_name = f"Circuit {circuit.group(1)[1]}" if circuit.group(1)[0] == "C" else f"{circuit.group(1)} Circuit"
+        part, kind, extra, diagnostic = CIRCUIT_PARTS[circuit.group(2)]
+        name = f"{circuit_name} {part}"
+        object_id = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     elif PUMP_RE.match(key):
         number_ = PUMP_RE.match(key).group(1)
         name, kind, extra, diagnostic, object_id = f"P{number_} Pump", "map", OFF_ON, False, f"p{number_}_pump"
@@ -252,18 +396,18 @@ def number(value):
 def valid_temperature(key, value):
     """Same bounds as the portal templates; -55 and 0 on flue gas or return mean no reading."""
     value = number(value)
-    if value is None or not -45.0 < value < (300.0 if key == "B_Tdpl1" else 145.0):
+    if value is None or not -45.0 < value < TEMPERATURE_MAX.get(key, 145.0):
         return None
     if key in ("B_Tdpl1", "B_Tpov1") and value == 0:
         return None
     return float(value)
 
 
-def display_value(key, value):
+def display_value(key, value, product=None):
     """The value shown in Home Assistant for a raw parameter; None when it is not a valid reading."""
     if value is None:
         return None
-    _, kind, extra, _, _ = parameter_info(key)
+    _, kind, extra, _, _ = parameter_info(key, product)
     if kind in ("temperature", "setpoint"):
         return valid_temperature(key, value)
     if kind == "stage":
@@ -305,7 +449,7 @@ def stage_attributes(code):
     return {"Raw stage code": code, "Stage group": group, "Description": STAGES.get(code, code), "Power level": level}
 
 
-def extra_attributes(key, values):
+def extra_attributes(key, values, product=None):
     """Attributes per parameter, the same ones the cloud integration exposes."""
     attributes = {"Original name": key}
     raw = values.get(key)
@@ -327,7 +471,7 @@ def extra_attributes(key, values):
         if meaning:
             attributes.update({"Meaning": meaning[0], "Category": meaning[1], "Temporary shutdown": meaning[2],
                                "Documentation": meaning[3]})
-    elif key == "B_KONF":
+    elif key == "B_KONF" and (product or TESTED_PRODUCT) == TESTED_PRODUCT:
         code = number(raw)
         attributes.update(SCHEME_ATTRIBUTES.get(int(code) if code is not None else None, {}))
     elif key in ("B_PTV_PRI", "B_signal"):
@@ -335,9 +479,9 @@ def extra_attributes(key, values):
     return attributes
 
 
-def enabled_by_default(key):
+def enabled_by_default(key, product=None):
     """Meaning unknown or nothing connected to it: the entity exists, but stays off until someone wants it."""
-    return key != "B_Ths1" and parameter_info(key)[1] != "raw"
+    return key != "B_Ths1" and parameter_info(key, product)[1] != "raw"
 
 
 def product_of(status):

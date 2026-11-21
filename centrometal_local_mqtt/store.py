@@ -244,8 +244,8 @@ class State:
                 atomic_write(self.alarm_path, json.dumps({"active": self.active_alarms, "history": self.alarm_history}))
 
     def _note_alarm(self, code: str, value: Any) -> None:
-        """Alarms only come from the boiler: nothing here can end one. A value starting with P means it has passed (scr34m);
-        not yet seen on a PelTec II."""
+        """Alarms only come from the boiler: nothing here can end one. A value starting with P means it has passed, as
+        documented for the protocol; not yet seen on a PelTec II."""
         cleared = str(value).startswith("P")
         known = self.active_alarms.get(code)
         if (cleared and code not in self.active_alarms) or (not cleared and known == value):

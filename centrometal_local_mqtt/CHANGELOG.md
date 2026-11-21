@@ -2,6 +2,13 @@
 
 The app and the integration always have the same version: update both.
 
+## 1.7.7 — the other boilers get their own names
+
+- **CM Pelet-set, BioTec, BioTec-Plus:** the counters are named after the boiler's own family, with its units ("Operation Pellets" in minutes, "Startup Wood" as a count). They carried the PelTec II's names, which mean something else on these boilers. A BioTec counter of unknown meaning keeps its raw name and stays disabled. On the BioTec and BioTec-Plus `B_Tpov1` is the mixer temperature and `B_Tptv1` the domestic hot water; on the CM Pelet-set `B_fan` is the heater fan on/off.
+- **Every boiler other than the PelTec II:** pump P1, the boiler command state, the K1/K2 pump and the DHW tank temperature are shown; on the PelTec II they repeat another sensor and stay hidden. P2 is "P2 Pump" (the DHW recirculation pump is the PelTec II's scheme 43), and the configuration shows its number without the scheme 43 name.
+- **Heating circuits C1-C4 and K2-K4** are named ("Circuit 1 Room Measured Temperature", "Circuit 1 Day Night Mode"), as are the wood and pellet boiler temperatures, the firebox temperature (up to 1500 °C), the pump demands, the air flow and the WiFi box version.
+- Entity IDs that exist keep working: an existing sensor changes only its name, and a counter its unit, which Home Assistant may report under Statistics. The PelTec II is unchanged.
+
 ## 1.7.6 — up to date
 
 - The app runs on Python 3.14 (was 3.12), on the official image pinned by digest.

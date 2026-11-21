@@ -150,6 +150,13 @@ async def test_another_boiler_is_read_only_and_named_after_its_product(hass, soc
         device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
         assert (device.name, device.model) == ("CM Pelet-set", "CM Pelet-set")
         assert hass.states.get("sensor.cm_pelet_set_gateway_state").state == "local"
+        # Named after the counters of its own family, and the readings of a boiler with no switch are shown.
+        other.gateway.state.ingest({"CNT_1": 125, "B_CMD": 1, "C1B_Tsob1": 21.5, "clMsgId": 7})
+        dhw_only = "sensor.cm_pelet_set_working_dhw_only"
+        await until(lambda: hass.states.get(dhw_only) is not None and hass.states.get(dhw_only).state == "125")
+        assert hass.states.get(dhw_only).attributes["unit_of_measurement"] == "min"
+        assert hass.states.get("sensor.cm_pelet_set_command_active").state == "On"
+        assert hass.states.get("sensor.cm_pelet_set_circuit_1_room_measured_temperature").state == "21.5"
         assert await hass.config_entries.async_unload(entry.entry_id)
     finally:
         await other.stop()
