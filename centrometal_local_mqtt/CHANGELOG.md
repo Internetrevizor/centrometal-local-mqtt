@@ -2,6 +2,16 @@
 
 The app and the integration always have the same version: update both.
 
+## 1.8.0 — BioTec-L and CM Pelet-set: their own stages and codes
+
+From the controller manuals "Technical instructions REGULATION BioTec-L" and "Technical instructions CONTROLLER - CPREG-Touch" (CM Pelet-set), with the same texts as the cloud integration (Centrometal Cloud 1.2.0 and 1.3.0).
+
+- **Boiler State on a BioTec-L and a CM Pelet-set** shows the stages of its own manual: `GLW2: Keeping the glow` on a BioTec-L (pages 60-62), `S7-3: Standby, waiting for start conditions` on a CM Pelet-set (page 49). They showed the PelTec II texts, which mean something else there: `S1` is "Ignition 2/3" on a BioTec-L, not "Not in use". A stage the manual does not list in that form is `Unknown (<code>)`. The BioTec-L is told from another BioTec by its product name; another BioTec keeps the texts it had.
+- **Alarm:** a new `Descriptions` attribute gives what each active code means on a BioTec-L (pages 64-72) or a CM Pelet-set (pages 95-105), for example `W11: Out of fuel`.
+- **CM Pelet-set Setup** keeps the marking ("A.7.2") and spells it out in its attributes (pages 50-51): Boiler connection, DHW, Heating circuits with mixing valve.
+- **BioTec and BioTec-Plus:** `B_Tpov1` is the "Return Flow Temperature", as on the PelTec: the return flow sensor (S7) in the BioTec-L boiler manual, page 32. It was named "Mixer Temperature"; only the name changes, the entity ID stays.
+- The PelTec II is unchanged.
+
 ## 1.7.7 — the other boilers get their own names
 
 - **CM Pelet-set, BioTec, BioTec-Plus:** the counters are named after the boiler's own family, with its units ("Operation Pellets" in minutes, "Startup Wood" as a count). They carried the PelTec II's names, which mean something else on these boilers. A BioTec counter of unknown meaning keeps its raw name and stays disabled. On the BioTec and BioTec-Plus `B_Tpov1` is the mixer temperature and `B_Tptv1` the domestic hot water; on the CM Pelet-set `B_fan` is the heater fan on/off.

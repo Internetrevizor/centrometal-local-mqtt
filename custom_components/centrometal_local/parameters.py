@@ -20,6 +20,77 @@ STAGES = {
     "PF1": "Power failure, flame appeared, electric heater off", "PF2": "Power failure, flame developing",
     "PF3": "Power failure, waiting for flame to disappear", "PF4": "Power failure, final fan blowing", "C0": "Grate cleaning",
 }
+# A BioTec-L and a CM Pelet-set have stages of their own, with the same texts as the cloud integration. BioTec-L: "Technical
+# instructions REGULATION BioTec-L", operation phases, pages 60-62; "PF-" in front of a phase means it follows a power
+# failure. CM Pelet-set: "Technical instructions CONTROLLER - CPREG-Touch", burner working stages, page 49.
+BIOTEC_L_STAGES = {
+    "OFF": "Switched off", "S0": "Ignition 1/3, fan at maximum speed",
+    "S1": "Ignition 2/3, waiting for flue gas above 50 °C", "SP1": "Setting the primary and secondary air",
+    "SP2": "Stabilisation", "SD4": "Setting the air for power D4", "D4": "Power D4", "D3": "Power D3", "D2": "Power D2",
+    "D1": "Power D1", "DOP0": "Upper door open",
+    "DIF1": "Turning off (set temperature, low firebox or high flue gas temperature)",
+    "DIF2": "Waiting for the boiler to cool by the differential", "DIF3": "Blowout while waiting for the boiler to cool",
+    "DIF4": "Restarting, setting the primary and secondary air", "GLW1": "Shutting down to keep the glow",
+    "GLW2": "Keeping the glow", "GLW3": "Glow blowout", "GLW4": "New filling, setting the primary and secondary air",
+    "OFF1": "Shutting down, then OFF", "PF-ON": "Power failure — air zeroed, restarting automatically",
+}
+PELET_SET_STAGES = {
+    "OFF": "Burner off", "A0": "Burner start, fan only", "A1": "Igniter on, start-up safety time running",
+    "A2": "Initial pellet filling", "A3": "Waiting for flame", "A4": "Flame, igniter still on",
+    "A5": "Igniter off, waiting for transition", "PP1": "Transition stage 1", "PP2": "Transition stage 2",
+    "PP3": "Transition stage 3", "PP4": "Transition stage 4", "PP5": "Transition stage 5", "A6": "Before nominal power",
+    "P": "Nominal power", "P2": "Nominal power P2", "P3": "Nominal power P3", "P4": "Nominal power P4",
+    "P5": "Nominal power P5", "P6": "Nominal power P6", "M4": "Modulation stage 4", "M3": "Modulation stage 3",
+    "M2": "Modulation stage 2", "M1": "Modulation stage 1", "PFON230": "Power returned after a failure, resuming",
+    "F1": "Pellet inlet pipe overload", "S7": "Extinguishing, first step", "S7-1": "Extinguishing, waiting for flame loss",
+    "S7-2": "Extinguishing, fan at maximum", "S7-3": "Standby, waiting for start conditions",
+}
+# Errors (E), warnings (W) and information (I): BioTec-L manual pages 64-72, CPREG-Touch manual pages 95-105.
+BIOTEC_L_CODES = {
+    "E1": "DHW sensor", "E2": "Buffer tank sensor (upper)", "E3": "Buffer tank sensor (lower)", "E4": "Flue gas sensor",
+    "E5": "Outside temperature sensor", "E6": "Main flow sensor", "E7": "Return flow sensor", "E8": "Boiler sensor",
+    "E9": "Unknown boiler power", "E10": "Fan error", "E12": "Communication error with motherboard",
+    "E13": "Communication error with sensor board", "E14": "Lambda probe error",
+    "E16": "Communication error with CM2K (1+ and 2+)", "E17": "CM2K 1+ circuit sensor",
+    "E18": "CM2K 1+ circuit corrector", "E19": "CM2K 2+ circuit sensor", "E20": "CM2K 2+ circuit corrector",
+    "E21": "Firebox sensor", "E24": "Room corrector error", "E26": "Firebox sensor disconnected",
+    "E27": "Hydraulic crossover sensor error", "E29": "Communication error with WiFi",
+    "W1": "Factory settings loaded", "W2": "Flue gas temperature high, close the upper door", "W3": "Fan protection",
+    "W4": "Intervention work (firebox sensor)", "W5": "Intervention work (lambda probe)",
+    "W6": "Intervention work (flue gas sensor)", "W7": "Intervention work (RPM sensor)", "W8": "Ignition error, try again",
+    "W9": "Fan off, flue gas temperature too high, close the upper door", "W10": "Low return temperature",
+    "W11": "Out of fuel", "W12": "Low buffer temperature", "I1": "OFF during ignition",
+    "I2": "Ignition automatically proceeded", "I3": "Bad ignition", "I4": "OFF during stabilisation",
+    "I5": "Power up after a power failure", "I6": "Glow after power up", "I7": "OFF after power up",
+}
+PELET_SET_CODES = {
+    "E0": "Communication error with motherboard", "E1": "Pressure switch", "E2": "Ignition error",
+    "E3": "Pellet supply tube temperature too high", "E4": "Boiler sensor", "E5": "DHW sensor",
+    "E6": "Flame loss while working", "E7": "Wrong date and time", "E8": "Fan malfunction",
+    "E9": "Supply tube backfilled with pellets", "E10": "Buffer tank sensor (upper)", "E11": "Buffer tank sensor (lower)",
+    "E12": "Hydraulic crossover sensor", "E13": "Return line sensor", "E14": "Outside temperature sensor",
+    "E15": "1st circuit sensor", "E16": "1st circuit corrector", "E17": "2nd circuit sensor",
+    "E18": "2nd circuit corrector", "E19": "Photocell error", "E20": "Safety thermostat", "E21": "Recirculation sensor",
+    "E22": "Unknown boiler power", "E23": "Wrong boiler power", "E24": "Fuel level", "E101": "CM2K 1+ circuit sensor",
+    "E102": "CM2K 1+ circuit corrector", "E103": "CM2K 2+ circuit sensor", "E104": "CM2K 2+ circuit corrector",
+    "E105": "CM2K 3+ circuit sensor", "E106": "CM2K 3+ circuit corrector", "E107": "CM2K 4+ circuit sensor",
+    "E108": "CM2K 4+ circuit corrector", "E109": "CM2K 5+ circuit sensor", "E110": "CM2K 5+ circuit corrector",
+    "E111": "CM2K 6+ circuit sensor", "E112": "CM2K 6+ circuit corrector", "E119": "Fuel sensor",
+    "E120": "Flap not closed", "E121": "No pellets", "W1": "Factory parameters loaded", "W2": "Wrong date and time",
+    "W3": "Low return temperature", "W4": "Fuel level",
+}
+# The CM Pelet-set configuration marking XYZ ("A.7.2"), CPREG-Touch manual pages 50-51.
+PELET_SET_CONNECTIONS = {
+    "A": "Accumulation tank via 3-way thermostatic valve", "B": "Accumulation tank via 3-way valve with actuator",
+    "C": "Hydraulic crossover via 3-way thermostatic valve", "D": "Hydraulic crossover via 3-way valve with actuator",
+    "E": "Hydraulic crossover with sensor via 3-way thermostatic valve",
+    "F": "Hydraulic crossover with sensor via 3-way valve with actuator", "H": "4-way valve with actuator",
+    "I": "Accumulation tank via 4-way valve with actuator", "J": "Hydraulic crossover via 4-way valve with actuator",
+    "K": "Hydraulic crossover with sensor via 4-way valve with actuator",
+}
+PELET_SET_DHW = {"0": "None", "1": "DHW tank", "2": "DHW tank with recirculation", "7": "DHW tank in the boiler",
+                 "8": "DHW tank in the boiler with recirculation"}
+PELET_SET_CIRCUITS = {"0": "None", "1": "1", "2": "2"}
 BURNER = {0: "Stopped", 1: "Running", 2: "Stopping", 3: "Cleaning"}
 FUEL = {0: "Empty", 1: "Reserve", 2: "Full"}
 MARK = {0: "None", 1: "R", 2: "B", 3: "T", 4: "G", 5: "F"}
@@ -192,7 +263,7 @@ OTHER_PRODUCTS = {
         "CNT_8": ("Boiler Pump Working Time", "counter", _MINUTES, False, "boiler_pump_working_time"),
     },
     "biotec": {
-        "B_Tpov1": ("Mixer Temperature", "temperature", None, False, "mixer_temperature"),
+        "B_Tpov1": ("Return Flow Temperature", "temperature", None, False, "mixer_temperature"),
         "B_Tptv1": ("Domestic Hot Water", "temperature", None, False, "domestic_hot_water"),
         "B_P1": ("Boiler Pump", "map", OFF_ON, False, "boiler_pump"),
         "B_P2": ("Second Pump", "map", OFF_ON, False, "second_pump"),
@@ -202,7 +273,7 @@ OTHER_PRODUCTS = {
         "CNT_4": ("Fan Working Time", "counter", _MINUTES, False, "fan_working_time"),
     },
     "biopl": {
-        "B_Tpov1": ("Mixer Temperature", "temperature", None, False, "mixer_temperature"),
+        "B_Tpov1": ("Return Flow Temperature", "temperature", None, False, "mixer_temperature"),
         "B_Tptv1": ("Domestic Hot Water", "temperature", None, False, "domestic_hot_water"),
         "B_P1": ("Boiler Pump", "map", OFF_ON, False, "boiler_pump"),
         "B_P2": ("Second Pump", "map", OFF_ON, False, "second_pump"),
@@ -403,15 +474,54 @@ def valid_temperature(key, value):
     return float(value)
 
 
-def display_value(key, value, product=None):
-    """The value shown in Home Assistant for a raw parameter; None when it is not a valid reading."""
+def family(product=None, values=None):
+    """The boiler whose stage texts and codes apply: "biotec-l" for a BioTec-L (its product name says so; other BioTec
+    boilers have other manuals), "cmpelet", or else the product code."""
+    product = product or TESTED_PRODUCT
+    if product == "biotec" and "biotec-l" in str((values or {}).get("B_PRODNAME") or "").lower():
+        return "biotec-l"
+    return product
+
+
+def stage_text(code, product=None, values=None):
+    """ "D3: Power D3", or "Unknown (<code>)" for a stage the boiler's manual does not list in that form."""
+    code = str(code).strip()
+    boiler = family(product, values)
+    stages = {"biotec-l": BIOTEC_L_STAGES, "cmpelet": PELET_SET_STAGES}.get(boiler, STAGES)
+    if code in stages:
+        return f"{code}: {stages[code]}"
+    if boiler == "biotec-l" and code.startswith("PF-") and code[3:] in stages:
+        return f"{code}: Power failure — {stages[code[3:]]}"
+    return f"Unknown ({code})"
+
+
+def code_description(code, product=None, values=None):
+    """What an error, warning or information code means on this boiler; None where its manual is not known here."""
+    codes = {"biotec-l": BIOTEC_L_CODES, "cmpelet": PELET_SET_CODES}.get(family(product, values), {})
+    return codes.get(str(code))
+
+
+def pelet_set_configuration(value):
+    """The three parts of a CM Pelet-set configuration marking ("A.7.2"); empty when it is not one."""
+    marking = str(value or "").replace(".", "").strip().upper()
+    if len(marking) != 3:
+        return {}
+    parts = (PELET_SET_CONNECTIONS.get(marking[0]), PELET_SET_DHW.get(marking[1]), PELET_SET_CIRCUITS.get(marking[2]))
+    if None in parts:
+        return {}
+    return dict(zip(("Boiler connection", "DHW", "Heating circuits with mixing valve"), parts, strict=True))
+
+
+def display_value(key, value, product=None, values=None):
+    """The value shown in Home Assistant for a raw parameter; None when it is not a valid reading. `values` are the
+    boiler's other readings: the product name tells a BioTec-L from another BioTec."""
     if value is None:
         return None
     _, kind, extra, _, _ = parameter_info(key, product)
     if kind in ("temperature", "setpoint"):
         return valid_temperature(key, value)
     if kind == "stage":
-        return f"{value}: {extra[value]}" if value in extra else f"Unknown ({value})"
+        return stage_text(value, product, values)
     if kind == "map":
         code = number(value)
         code = int(code) if code is not None and code == int(code) else value
@@ -426,9 +536,35 @@ def display_value(key, value, product=None):
     return str(value)
 
 
-def stage_attributes(code):
+def _other_stage_group(code, boiler):
+    """The stage group of a BioTec-L or a CM Pelet-set, as the cloud integration reports it; (group, power level)."""
+    if boiler == "biotec-l":
+        phase = code[3:] if code.startswith("PF-") else code
+        level = int(phase[1:]) if phase in ("D1", "D2", "D3", "D4") else None
+        groups = (("power_failure_recovery", code.startswith("PF-")), ("off", code == "OFF"),
+                  ("ignition_startup", code in ("S0", "S1", "SP1", "SP2", "SD4")), ("modulation", level is not None),
+                  ("door_open", code == "DOP0"), ("differential", code.startswith("DIF")),
+                  ("glow", code.startswith("GLW")), ("shutdown", code == "OFF1"))
+    else:
+        level = int(code[1:]) if code in ("M1", "M2", "M3", "M4") else None
+        groups = (("off", code == "OFF"),
+                  ("ignition_startup", code in ("A0", "A1", "A2", "A3", "A4", "A5", "A6", "PP1", "PP2", "PP3", "PP4",
+                                                "PP5")),
+                  ("nominal_power", code in ("P", "P2", "P3", "P4", "P5", "P6")), ("modulation", level is not None),
+                  ("standby", code == "S7-3"), ("shutdown", code in ("S7", "S7-1", "S7-2")),
+                  ("power_failure_recovery", code == "PFON230"), ("overload", code == "F1"))
+    return next((group for group, matches in groups if matches), "unknown"), level
+
+
+def stage_attributes(code, product=None, values=None):
     """The attributes of the cloud entity that automations read."""
     code = "" if code is None else str(code).strip()
+    boiler = family(product, values)
+    if boiler in ("biotec-l", "cmpelet"):
+        group, level = _other_stage_group(code, boiler)
+        text = stage_text(code, product, values)
+        description = text.split(": ", 1)[1] if not text.startswith("Unknown") else code
+        return {"Raw stage code": code, "Stage group": group, "Description": description, "Power level": level}
     level = int(code[1:]) if len(code) == 2 and code.startswith("D") and code[1:].isdigit() else None
     if code == "OFF":
         group = "off"
@@ -454,7 +590,9 @@ def extra_attributes(key, values, product=None):
     attributes = {"Original name": key}
     raw = values.get(key)
     if key == "B_STATE":
-        attributes.update(stage_attributes(raw))
+        attributes.update(stage_attributes(raw, product, values))
+    elif key == "B_KONF_STR" and product == "cmpelet":
+        attributes.update(pelet_set_configuration(raw))
     elif key == "B_start":
         attributes["Boiler state"] = values.get("B_STATE")
     elif key in ("B_Ppwm", "B_fan01"):

@@ -582,7 +582,9 @@ class ParameterTests(unittest.TestCase):
         self.assertEqual(info("CNT_15", "biopl")[:3], ("Grate Cleaning", "counter", None))
         self.assertEqual(info("CNT_3", "cmpelet")[:3], ("Number of Burner Starts", "counter", None))
         self.assertEqual(info("CNT_1", "cmpelet")[:3], ("Working DHW Only", "counter", "min"))
-        self.assertEqual(info("B_Tpov1", "biopl")[0], "Mixer Temperature")
+        # The return flow sensor (BioTec-L boiler manual, S7); named "Mixer Temperature" up to 1.7.7, entity_id kept.
+        self.assertEqual(info("B_Tpov1", "biopl")[0], "Return Flow Temperature")
+        self.assertEqual(info("B_Tpov1", "biotec")[4], "sensor.peltec_ii_lambda_mixer_temperature")
         self.assertEqual(info("B_Tpov1", "peltec")[0], "Return Flow Temperature")
         self.assertEqual(info("B_fan", "cmpelet")[:2], ("Heater Fan State", "map"))
         self.assertEqual(info("B_P2", "peltec")[0], "P2 Pump")
@@ -595,6 +597,36 @@ class ParameterTests(unittest.TestCase):
         self.assertEqual(info("B_P1", "biopl")[0], "Boiler Pump")
         self.assertEqual(self.p.display_value("B_KONF", 42, "biopl"), "42")
         self.assertEqual(self.p.extra_attributes("B_KONF", {"B_KONF": 42}, "biopl"), {"Original name": "B_KONF"})
+
+    def test_a_biotec_l_and_a_pelet_set_have_their_own_stages(self):
+        """BioTec-L manual pages 60-62, CPREG-Touch manual page 49: the same texts as the cloud integration."""
+        biotec_l = {"B_PRODNAME": "BioTec-L"}
+        show = self.p.display_value
+        self.assertEqual(show("B_STATE", "S1", "biotec", biotec_l), "S1: Ignition 2/3, waiting for flue gas above 50 °C")
+        self.assertEqual(show("B_STATE", "PF-GLW2", "biotec", biotec_l), "PF-GLW2: Power failure — Keeping the glow")
+        self.assertEqual(show("B_STATE", "S7", "biotec", biotec_l), "Unknown (S7)")
+        self.assertEqual(show("B_STATE", "S7-3", "cmpelet"), "S7-3: Standby, waiting for start conditions")
+        self.assertEqual(show("B_STATE", "M-1", "cmpelet"), "Unknown (M-1)")
+        # Another BioTec, and the PelTec II, keep the PelTec II texts.
+        self.assertEqual(show("B_STATE", "S1", "biotec", {"B_PRODNAME": "BioTec"}), "S1: Not in use")
+        self.assertEqual(show("B_STATE", "S1"), "S1: Not in use")
+        attributes = self.p.extra_attributes("B_STATE", {"B_STATE": "GLW2", **biotec_l}, "biotec")
+        self.assertEqual((attributes["Stage group"], attributes["Description"]), ("glow", "Keeping the glow"))
+        attributes = self.p.extra_attributes("B_STATE", {"B_STATE": "M3"}, "cmpelet")
+        self.assertEqual((attributes["Stage group"], attributes["Power level"]), ("modulation", 3))
+        self.assertEqual(self.p.extra_attributes("B_STATE", {"B_STATE": "A7-1"}, "cmpelet")["Stage group"], "unknown")
+
+    def test_codes_and_the_pelet_set_configuration_are_spelled_out(self):
+        self.assertEqual(self.p.code_description("W11", "biotec", {"B_PRODNAME": "BioTec-L"}), "Out of fuel")
+        self.assertEqual(self.p.code_description("E2", "cmpelet"), "Ignition error")
+        self.assertIsNone(self.p.code_description("E12", "peltec2"))
+        self.assertIsNone(self.p.code_description("W11", "biotec", {"B_PRODNAME": "BioTec"}))
+        attributes = self.p.extra_attributes("B_KONF_STR", {"B_KONF_STR": "A.7.2"}, "cmpelet")
+        self.assertEqual(attributes["Boiler connection"], "Accumulation tank via 3-way thermostatic valve")
+        self.assertEqual(attributes["DHW"], "DHW tank in the boiler")
+        self.assertEqual(attributes["Heating circuits with mixing valve"], "2")
+        self.assertEqual(self.p.pelet_set_configuration("G.1.1"), {})
+        self.assertEqual(self.p.display_value("B_KONF_STR", "A.7.2", "cmpelet"), "A.7.2")
 
     def test_heating_circuits_and_wood_boiler_readings_are_named(self):
         info = self.p.parameter_info

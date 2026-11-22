@@ -3,6 +3,7 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .parameters import code_description, product_of
 from .sensor import device_info
 
 
@@ -44,4 +45,12 @@ class BoilerAlarm(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"codes": sorted((self.coordinator.data or {}).get("alarms") or {})}
+        data = self.coordinator.data or {}
+        codes = sorted(data.get("alarms") or {})
+        attributes = {"codes": codes}
+        # What each code means, from the boiler's manual, where it is known here (BioTec-L, CM Pelet-set).
+        meanings = {code: code_description(code, product_of(data), data.get("values")) for code in codes}
+        meanings = {code: text for code, text in meanings.items() if text}
+        if meanings:
+            attributes["Descriptions"] = meanings
+        return attributes

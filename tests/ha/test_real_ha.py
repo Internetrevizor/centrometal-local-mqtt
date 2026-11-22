@@ -162,6 +162,31 @@ async def test_another_boiler_is_read_only_and_named_after_its_product(hass, soc
         await other.stop()
 
 
+async def test_a_biotec_l_has_its_own_stages_and_warnings(hass, socket_enabled):
+    """BioTec-L manual: operation phases (pages 60-62) and warnings (page 72), the texts of the cloud integration."""
+    other = App(product="biotec")
+    await other.start()
+    try:
+        await until(lambda: other.gateway.state.product == "biotec")
+        other.gateway.state.ingest({"B_PRODNAME": "BioTec-L", "B_STATE": "GLW2", "B_Tpov1": -55, "W11": "A",
+                                    "clMsgId": 7})
+        entry = await add_entry(hass, other)
+        from homeassistant.helpers import entity_registry as er
+        registry = er.async_get(hass)
+        state_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_B_STATE")
+        await until(lambda: hass.states.get(state_id).state == "GLW2: Keeping the glow")
+        assert hass.states.get(state_id).attributes["Stage group"] == "glow"
+        returned = hass.states.get(registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_B_Tpov1"))
+        assert returned.name == "BioTec Return Flow Temperature"
+        assert returned.state == "unknown"
+        alarm = hass.states.get("binary_sensor.biotec_alarm")
+        assert alarm.state == "on"
+        assert alarm.attributes["Descriptions"] == {"W11": "Out of fuel"}
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    finally:
+        await other.stop()
+
+
 async def test_last_reported_keeps_moving_while_the_value_stays_the_same(hass, app):
     """incalzire.yaml reads last_reported of the puffer sensors: an unchanged value must still be written."""
     entry = await add_entry(hass, app)

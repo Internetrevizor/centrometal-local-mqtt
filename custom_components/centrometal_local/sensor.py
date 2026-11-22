@@ -145,7 +145,8 @@ class PelTecValue(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return display_value(self.key, (self.coordinator.data or {}).get("values", {}).get(self.key), self.product)
+        values = (self.coordinator.data or {}).get("values", {})
+        return display_value(self.key, values.get(self.key), self.product, values)
 
     @property
     def extra_state_attributes(self):
