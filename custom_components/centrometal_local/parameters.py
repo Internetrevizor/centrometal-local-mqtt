@@ -637,8 +637,11 @@ def writable(status):
 
 
 def commands_available(status):
-    """Commands wait for the module during a short reconnect in local mode, so a session gap does not take them away."""
+    """Commands wait for the module during a short reconnect, so a session gap does not take them away. Since 1.9.0 the
+    app says itself whether it takes them: in cloud_proxy it does with a portal account."""
     status = status or {}
+    if "commands_available" in status:
+        return bool(status["commands_available"]) and bool(status.get("data_fresh")) and writable(status)
     return status.get("connection_mode") == "local" and bool(status.get("data_fresh")) and writable(status)
 
 

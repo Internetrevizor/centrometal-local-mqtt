@@ -2,6 +2,13 @@
 
 The app and the integration always have the same version: update both.
 
+## 1.9.0 — cloud_proxy reads and commands through the portal
+
+- **cloud_proxy with a portal account:** two new options, `portal_email` and `portal_password` (your web-boiler.com account). The app then asks for readings through the portal at the same moments as in `local` (`read_interval_seconds`, counters every minute, settings every hour), so they no longer go unavailable while nobody has the portal open.
+- On/off, settings, the DHW circuit, the DHW / heating mode and DHW priority work in `cloud_proxy` too: the portal sends them to the boiler as its own web application does, and a command is confirmed only when the boiler reports the new value through the proxy, as in `local`. Same limits as in `local`; PelTec II only.
+- `Gateway State` has a `portal` attribute: `ok`, `unreachable: ...` or `login refused`. After a refused login the app waits 10 minutes before it tries again, so the account is not locked.
+- Without the account, `cloud_proxy` is unchanged. `local` is unchanged. Update the app and the integration together: an older integration keeps the commands unavailable in `cloud_proxy`.
+
 ## 1.8.0 — BioTec-L and CM Pelet-set: their own stages and codes
 
 From the controller manuals "Technical instructions REGULATION BioTec-L" and "Technical instructions CONTROLLER - CPREG-Touch" (CM Pelet-set), with the same texts as the cloud integration (Centrometal Cloud 1.2.0 and 1.3.0).

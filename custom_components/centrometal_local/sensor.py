@@ -54,7 +54,7 @@ class BridgeStatus(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         d = self.coordinator.data or {}
-        attributes = {k: d.get(k) for k in ("module_connected", "upstream_connected", "data_fresh", "connection_mode",
+        attributes = {k: d.get(k) for k in ("module_connected", "upstream_connected", "data_fresh", "connection_mode", "portal",
                                             "read_interval_seconds", "invalid_messages", "rejected_values", "malformed_frames", "stale_messages",
                                             "last_malformed", "at_commands", "last_command", "pending_command", "commands",
                                             "sessions_closed", "close_reasons", "last_session_end",

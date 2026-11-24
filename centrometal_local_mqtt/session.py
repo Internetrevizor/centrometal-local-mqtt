@@ -197,3 +197,32 @@ class LocalSession:
         if self.rstat_at is not None and now >= self.rstat_at:
             self._request("RSTAT", "ALL")
             self.rstat_at = None
+
+
+class PortalSession(LocalSession):
+    """cloud_proxy with a portal account: the same reads and commands as a local session, at the same moments, handed to
+    the portal instead of written to the module. The portal sends them on, signed, over the proxied connection."""
+
+    def __init__(self, state: State, book: CommandBook, journal: Journal, config: dict[str, Any], now: float,
+                 event: Callable[..., None], product: str | None) -> None:
+        super().__init__(state, book, journal, config, now, event)
+        self.key = b""
+        self.topic_server = "portal"
+        self.subscribed = self.synced = True
+        self.product = product
+        self.next_refresh = now + self.first_poll_delay
+        self.next_settings = now + RSTAT_DELAY + 2 if product == TESTED_PRODUCT else None
+        self.outbox: list[dict[str, Any]] = []
+
+    def _publish(self, obj: dict[str, Any]) -> None:
+        self.srv_msg_id += 1
+        self.outbox.append(dict(obj))
+        self.journal.message("portal_down", msg=redact(obj))
+
+    def take_outbox(self) -> list[dict[str, Any]]:
+        outbox, self.outbox = self.outbox, []
+        return outbox
+
+    def tick(self, now: float) -> None:
+        self.last_heard = now  # the proxied connection has its own end; silence is not a reason to stop here
+        super().tick(now)

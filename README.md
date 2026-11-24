@@ -73,11 +73,11 @@ Every parameter the boiler sends becomes a sensor, with English names. Every ent
 | `connection_mode` | Portal and app | Readings in Home Assistant | On/off and settings from this project |
 |---|---|---|---|
 | `local` (default) | Stop seeing the boiler | Always, also with no internet | Yes |
-| `cloud_proxy` (bypass) | Keep working | A copy of what passes through | No, use the portal or the cloud integration |
+| `cloud_proxy` (bypass) | Keep working | A copy of what passes through | With `portal_email` and `portal_password`, through the portal; without them, no |
 
 **Before you choose:**
 - In every mode the module's traffic goes through Home Assistant. If Home Assistant is down, the module reaches neither this server nor the portal; only the boiler's own panel remains. If you want the cloud to be independent of Home Assistant, do not install this at all.
-- `cloud_proxy` passes the bytes unchanged and sends nothing of its own. With the burner off, the boiler sends temperatures only when asked, so readings depend on something asking through the portal, such as the cloud integration.
+- `cloud_proxy` passes the bytes unchanged and sends nothing of its own to the module. With the burner off, the boiler sends temperatures only when asked. With your portal account in `portal_email` and `portal_password`, the app asks itself, through the portal, at the same moments as in `local`, and sends on/off and settings the same way: the portal passes them to the boiler as its own web application does, and the boiler's answer, seen through the proxy, confirms them. Without the account, readings depend on something else asking through the portal, such as the cloud integration, and go unavailable 8 minutes after the last answer. The state of the account is the `portal` attribute of `Gateway State`; after a refused login the app waits 10 minutes before it tries again.
 - Next to the cloud integration, the sensors of this project get their own names with a `_2` suffix, because the entity_ids are taken.
 
 Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, readings, on/off and settings. Other boilers: see [Supported boilers](#supported-boilers).
@@ -135,6 +135,7 @@ What changed in each version: [CHANGELOG](centrometal_local_mqtt/CHANGELOG.md), 
 | `module_ip` | Only this IP is accepted |
 | `connection_mode` | `local` or `cloud_proxy`, see above |
 | `upstream_host` | The portal's name, used only by `cloud_proxy` |
+| `portal_email`, `portal_password` | Your web-boiler.com account, used only by `cloud_proxy`: reads and commands go through the portal. Set both or neither. Kept by Home Assistant in the app's options, never logged |
 | `read_interval_seconds` | Time between read requests, 10 to 240, default 60. One answer is about 1.3 kB. What matters during a burn arrives by itself |
 | `debug_journal` | Writes every message to `/share/centrometal_local_mqtt/journal.jsonl`, without MQTT password, token or signature. Skipped bytes are never written. Normally only new parameter names and session events are written |
 

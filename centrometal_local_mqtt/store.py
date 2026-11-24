@@ -164,6 +164,7 @@ class State:
         self.last_malformed = ""
         self.rejected_ip = ""
         self.product: str | None = None
+        self.serial: str | None = None  # from the module's topic, never saved or shown
         self._load_values()
 
     def mark_changed(self) -> None:

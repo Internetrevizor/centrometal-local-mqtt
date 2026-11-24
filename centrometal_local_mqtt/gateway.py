@@ -4,6 +4,8 @@ connection_mode:
   local        the module talks only to this server; the cloud is never contacted.
   cloud_proxy  bypass: transparent TCP proxy to the portal, which keeps working; local readings are a copy.
                Sends nothing of its own to the module. Portal down = session closed, as with no proxy at all.
+               With a portal account (portal_email, portal_password), the reads and commands of a local session go
+               through the portal, which passes them on to the module like its own (portal.py).
 
 In local mode the server sends protocol acknowledgements, the read requests REFRESH, RSTAT and PRD, and, when asked
 through the local API, CMD 0/1 and PWR for the settings listed in parameters.LIMITS, within their limits. Nothing else can
@@ -30,14 +32,16 @@ import time
 import urllib.request
 from http import HTTPStatus
 from typing import Any
+from collections.abc import Callable
 
 from commands import EXPIRED, FINISHED, RATE_LIMITED, Command, CommandBook
+from portal import WEBROOT, Portal, PortalAuthError, PortalError, accepted
 from parameters import API_VERSION, LIMITS, READ_SLOTS, TESTED_PRODUCT, setting_key, setting_step  # noqa: F401  (READ_SLOTS: read by the tests through this module)
 from protocol import (  # noqa: F401  (also the public names of this module, used by the tests)
     MQTTFrames, ModuleFrames, frame, get_publish, pub_frame, read_connect_password, redact, sign_obj, signing_key,
     topic_parts, varint, verify_payload,
 )
-from session import LocalSession
+from session import LocalSession, PortalSession
 from store import Journal, State, atomic_write
 
 LOG = logging.getLogger("peltec-gateway")
@@ -53,6 +57,7 @@ CONNECT_READ_TIMEOUT = 30
 MAX_CONNECT_BYTES = 65536
 SESSION_TICK_SECONDS = 0.5
 MAX_COMMAND_WAIT_SECONDS = 20
+PORTAL_LOGIN_RETRY_SECONDS = 600  # after a refused login: the account must not be locked by an app trying again and again
 
 
 def tune_socket(writer: asyncio.StreamWriter) -> None:
@@ -79,11 +84,13 @@ class Session:
 class MQTTObserver:
     """Passive copy of one direction of the proxied stream. Whatever happens here, the bytes still flow."""
 
-    def __init__(self, state: State, journal: Journal, session: Session, module_to_cloud: bool) -> None:
+    def __init__(self, state: State, journal: Journal, session: Session, module_to_cloud: bool,
+                 on_verified: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.state = state
         self.journal = journal
         self.session = session
         self.module_to_cloud = module_to_cloud
+        self.on_verified = on_verified
         self.frames = self._new_frames()
 
     def _new_frames(self) -> MQTTFrames:
@@ -111,6 +118,7 @@ class MQTTObserver:
             parts = topic_parts(topic, "inst")
             if parts:
                 self.state.note_product(parts[0])
+                self.state.serial = parts[1]  # only in memory: it finds the boiler on the portal account
         else:
             parts = topic_parts(topic.replace("/", "."), "srv")
         if not parts:
@@ -129,8 +137,8 @@ class MQTTObserver:
         if self.module_to_cloud:
             if verified is None:
                 self.state.invalid_messages += 1
-            else:
-                self.state.ingest(verified)
+            elif self.state.ingest(verified) and self.on_verified:
+                self.on_verified(verified)
         else:
             self.state.note_downlink(message)
 
@@ -226,6 +234,13 @@ class Gateway:
         self._current: Session | None = None
         self._local: LocalSession | None = None
         self._stop = asyncio.Event()
+        email, password = config.get("portal_email"), config.get("portal_password")
+        self.portal = (Portal(email, password, config.get("portal_webroot", WEBROOT))
+                       if config["connection_mode"] == "cloud_proxy" and email and password else None)
+        self.portal_status: str | None = "waiting for the module" if self.portal else None
+        self._portal_session: PortalSession | None = None
+        self._portal_blocked_until = 0.0
+        self._wake = asyncio.Event()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -242,6 +257,8 @@ class Gateway:
         self.commands.expire(time.monotonic())
         return {"api_version": API_VERSION,
                 "connection_mode": self.config["connection_mode"],
+                "commands_available": self._may_accept(),
+                "portal": self.portal_status,
                 "read_interval_seconds": self.config["read_interval_seconds"],
                 "pending_command": self.commands.pending_power(),
                 "commands": self.commands.summary()}
@@ -253,15 +270,18 @@ class Gateway:
         self.state.mark_changed()
 
     def _may_accept(self) -> bool:
-        """Never next to the cloud. In local mode a short reconnect does not refuse a command, it waits for the module."""
-        if self.config["connection_mode"] != "local":
-            return False
+        """Never next to the cloud but through it: in cloud_proxy only with a portal account, which sends the command the
+        portal's way. A short reconnect does not refuse a command, it waits for the module."""
         if self.state.product != TESTED_PRODUCT:
             return False  # only the tested boiler is written to; any other is read only
-        return (self._local is not None and self._local.synced) or self.state.is_fresh()
+        if self.config["connection_mode"] == "local":
+            return (self._local is not None and self._local.synced) or self.state.is_fresh()
+        return (self.portal is not None and time.monotonic() >= self._portal_blocked_until
+                and (self._portal_session is not None or self.state.is_fresh()))
 
     def _kick(self) -> None:
         """A new command goes out now, not at the next tick of the session."""
+        self._wake.set()
         if self._local is not None and self._current is not None:
             self._local.tick(time.monotonic())
             data = self._local.take_output()
@@ -364,7 +384,8 @@ class Gateway:
         self.state.mode = "proxy"
         self.state.upstream_connected = True
         self._event("proxy_session")
-        up = MQTTObserver(self.state, self.journal, session, True)
+        up = MQTTObserver(self.state, self.journal, session, True,
+                          lambda message: self.commands.observe(message, time.monotonic()))
         down = MQTTObserver(self.state, self.journal, session, False)
         up.feed(initial)
         down.feed(first)
@@ -372,6 +393,7 @@ class Gateway:
         await module_writer.drain()
         tasks = [asyncio.create_task(pump(module_reader, cloud_writer, up)),
                  asyncio.create_task(pump(cloud_reader, module_writer, down))]
+        portal = asyncio.create_task(self._drive_portal()) if self.portal else None
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             self.state.last_session_end = "module closed" if tasks[0] in done else "cloud closed"
@@ -380,13 +402,57 @@ class Gateway:
                     self.state.last_session_end = type(task.exception()).__name__
                     LOG.warning("Proxy stream closed: %s", self.state.last_session_end)
         finally:
-            for task in tasks:
+            for task in tasks + ([portal] if portal else []):
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, *([portal] if portal else []), return_exceptions=True)
             self.state.upstream_connected = False
             cloud_writer.close()
             with contextlib.suppress(Exception):
                 await cloud_writer.wait_closed()
+
+    async def _drive_portal(self) -> None:
+        """The reads and commands of a proxied session, through the portal account. Starts once the module has said which
+        boiler it is."""
+        while self.state.serial is None:
+            await self.state.wait_for_change(self.state.revision, SESSION_TICK_SECONDS)
+        session = PortalSession(self.state, self.commands, self.journal, self.config, time.monotonic(), self._event,
+                                self.state.product)
+        self._portal_session = session
+        self.state.mark_changed()
+        try:
+            while True:
+                now = time.monotonic()
+                if now >= self._portal_blocked_until:
+                    session.tick(now)
+                    for message in session.take_outbox():
+                        await self._to_portal(message)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), SESSION_TICK_SECONDS)
+                self._wake.clear()
+        finally:
+            self._portal_session = None
+
+    async def _to_portal(self, message: dict[str, Any]) -> None:
+        assert self.portal is not None
+        try:
+            answer = await asyncio.to_thread(self.portal.request, self.state.serial, message)
+        except PortalAuthError:
+            self._portal_blocked_until = time.monotonic() + PORTAL_LOGIN_RETRY_SECONDS
+            self._set_portal_status("login refused: check portal_email and portal_password")
+            return
+        except PortalError as exc:
+            self._set_portal_status(f"unreachable: {exc}")
+            return
+        self._set_portal_status("ok")
+        name = next(iter(message))
+        if name.startswith(("CMD", "PWR")) and not accepted(answer):
+            self._event("portal_refused", request=name)
+
+    def _set_portal_status(self, status: str) -> None:
+        if status != self.portal_status:
+            self.portal_status = status
+            self._event("portal", status=status)
+            self.state.mark_changed()
 
     async def local(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """The sockets of one local session. What to say and when is decided in LocalSession."""
@@ -566,6 +632,8 @@ def load_config(path: str) -> dict[str, Any]:
         "read_interval_seconds": int(cfg.get("read_interval_seconds", READ_INTERVAL_SECONDS)),
         "first_poll_delay_seconds": 2.0,
         "debug_journal": bool(cfg.get("debug_journal", False)),
+        "portal_email": str(cfg.get("portal_email") or "").strip(),
+        "portal_password": str(cfg.get("portal_password") or ""),
         "alarm_path": "/data/alarms.json",
         "values_path": "/data/values.json",
         "identity_path": "/data/module_identity.json",
@@ -575,6 +643,8 @@ def load_config(path: str) -> dict[str, Any]:
     ipaddress.ip_address(result["module_ip"])
     if not 10 <= result["read_interval_seconds"] <= 240:  # above 240 s readings would pass for stale between two reads
         raise ValueError("Invalid read interval")
+    if bool(result["portal_email"]) != bool(result["portal_password"]):
+        raise ValueError("Set both portal_email and portal_password, or neither")
     if result["connection_mode"] != "local" and result["upstream_host"] in ("127.0.0.1", "localhost", result["listen_host"]):
         raise ValueError("Upstream must not point back to this gateway")
     return result
