@@ -96,11 +96,11 @@ Tested on one real boiler (PelTec II Lambda 36): `local` and `cloud_proxy`, read
    [![Add the app repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FInternetrevizor%2Fcentrometal-local-mqtt)
 
 2. **Install the app** Centrometal Local MQTT Protocol. Set `module_ip` to the module's IP. Turn on Start on boot and Watchdog, then start it.
-3. **Install the integration with HACS.** Use the button, or go to HACS → ⋮ → Custom repositories and add the same URL with the type Integration.
+3. **Install the integration with HACS.** In HACS, search for **Centrometal Local MQTT Protocol**, or use the button.
 
    [![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Internetrevizor&repository=centrometal-local-mqtt&category=integration)
 
-   Then download Centrometal Local MQTT Protocol and restart Home Assistant. HACS installs integrations only, which is why the app comes from the app store.
+   Download it and restart Home Assistant. HACS installs integrations only, which is why the app comes from the app store.
    The app announces itself: the boiler appears under Discovered in Settings → Devices & services. Confirm it, nothing has to be typed.
 
    [![Open Devices and services](https://my.home-assistant.io/badges/integrations.svg)](https://my.home-assistant.io/redirect/integrations/)
